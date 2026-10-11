@@ -75,4 +75,6 @@ def setup_logging(level: str = "INFO", component_levels: Mapping[str, str] | Non
 
 
 def get_logger(component: str) -> Any:
-    return structlog.get_logger().bind(component=component)
+    # Lazy proxy: picks up the configuration active at call time (module-level loggers are
+    # created before setup_logging runs).
+    return structlog.get_logger(component=component)

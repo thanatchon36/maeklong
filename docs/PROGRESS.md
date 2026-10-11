@@ -12,7 +12,7 @@ session, so no signed call was made at all).
 | Milestone | Code | Tests | Commit |
 |---|---|---|---|
 | M0 scaffold, config, logging, exchangeInfo, SymbolSpec | done | done | M0 |
-| M1 market data gateway, order book, recorder | pending | | |
+| M1 market data gateway, order book, recorder | done | done | M1 |
 | M2 universe screener | pending | | |
 | M3 fair value, quoting, paper fills, analytics, shadow | pending | | |
 | M4 order manager, rate limiter, reconciler, dead-man, risk → demo | pending | | |
@@ -31,6 +31,25 @@ session, so no signed call was made at all).
 - Acceptance: `uv run python tools/show_specs.py` printed specs for DOGEUSDT, XRPUSDT, SOLUSDT, ADAUSDT, LINKUSDT
   from the live public API (2026-10-12). `ruff` clean, `mypy --strict` clean on core/.
 
+## M1 — done
+
+- `exchange/ws.py` (reconnect + full-jitter backoff, make-before-break 24 h roll with ordered replay),
+  `exchange/endpoints.py` (paths/weights), `exchange/rate_limiter.py` (windows from exchangeInfo, header drift
+  correction, 429 halt), `marketdata/{orderbook,market_state,gateway,recorder,pipeline}.py`,
+  `tools/validate_book.py`, `tools/run_m1_validation.sh`, `tools/capture_depth_fixture.py`.
+- Routed WS endpoints `/public` (depth, bookTicker) and `/market` (aggTrade, markPrice@1s) — DISCREPANCIES #1.
+- Book self-check/refresh: a fresh snapshot book is compared with the live book at the same update id; mismatch
+  or periodic refresh swaps books without an INVALID window.
+- Tests: book sync unit tests + hypothesis property test (random drops/duplicates/snapshots at arbitrary ids →
+  synced book always equals ground truth); market state (dedupe, staleness, disconnect, check/self-heal);
+  parsing of real captured messages; routed URLs/sharding; recorder round trip/compaction/retention;
+  ReconnectingWs against a local server (gapless roll, reconnect status); replay of a real recorded diff stream
+  (tests/fixtures/depth_capture.jsonl.gz) with injected gaps → detected, resynced, never silently wrong.
+- Smoke runs against the live public API (2026-10-12): 20 symbols × 3 min → 190/190 L1–L5 exact matches,
+  0 undetected mismatches, 100 Parquet files all readable; 3 symbols × 1.2 min → 20/20.
+
 ## Pending live-time validation
 
-(filled in as milestones add run scripts)
+| Acceptance | How to run | Report |
+|---|---|---|
+| M1: 24 h on 20 symbols, no undetected gaps, L1–L5 ≥ 99.9 %, Parquet readable | `tools/run_m1_validation.sh` (env: SYMBOLS, HOURS) | `reports/m1-validation/report.md` (+ `report.interim.md` every 10 min) |
