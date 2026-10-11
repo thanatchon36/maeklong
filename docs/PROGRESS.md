@@ -13,7 +13,7 @@ session, so no signed call was made at all).
 |---|---|---|---|
 | M0 scaffold, config, logging, exchangeInfo, SymbolSpec | done | done | M0 |
 | M1 market data gateway, order book, recorder | done | done | M1 |
-| M2 universe screener | pending | | |
+| M2 universe screener | done | done | M2 |
 | M3 fair value, quoting, paper fills, analytics, shadow | pending | | |
 | M4 order manager, rate limiter, reconciler, dead-man, risk → demo | pending | | |
 | M5 live small (gated) + shadow-vs-live gap report | pending | | |
@@ -47,6 +47,18 @@ session, so no signed call was made at all).
   (tests/fixtures/depth_capture.jsonl.gz) with injected gaps → detected, resynced, never silently wrong.
 - Smoke runs against the live public API (2026-10-12): 20 symbols × 3 min → 190/190 L1–L5 exact matches,
   0 undetected mismatches, 100 Parquet files all readable; 3 symbols × 1.2 min → 20/20.
+
+## M2 — done
+
+- `universe/screener.py` (hard exclusions, metrics, eligibility, ranking, scheduled `Screener.run`),
+  `universe/history.py` (daily medians from recorded Parquet, cached per completed day; snapshot fallback during
+  bootstrap), `quoting/sizing.py` (order size rules, effective inventory units, client-id length check),
+  `tools/screen_once.py`.
+- Tests: every hard-exclusion rule (incl. hedge-only, blacklist file, listing age, TRADIFI/USDC/delivery, non-ASCII,
+  POSITION_RISK_CONTROL), metrics/eligibility/ranking/candidate cap, sizing edge cases, history-over-snapshot
+  preference with a recorded dataset, scheduled screener survives a failed cycle.
+- Acceptance: `uv run python tools/screen_once.py` against the live public API (2026-10-12) produced a ranked
+  list of 20 CANDIDATEs with all metrics; BTCUSDT/ETHUSDT reported as excluded (hedge_only).
 
 ## Pending live-time validation
 
