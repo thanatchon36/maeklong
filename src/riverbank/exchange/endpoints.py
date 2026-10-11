@@ -22,6 +22,8 @@ MARGIN_TYPE = "/fapi/v1/marginType"
 POSITION_MODE = "/fapi/v1/positionSide/dual"
 LISTEN_KEY = "/fapi/v1/listenKey"
 SAPI_API_RESTRICTIONS = "/sapi/v1/account/apiRestrictions"  # on api.binance.com
+MULTI_ASSETS = "/fapi/v1/multiAssetsMargin"
+TRADING_STATUS = "/fapi/v1/apiTradingStatus"
 
 
 def depth_weight(limit: int) -> int:
@@ -62,6 +64,7 @@ _FIXED: dict[tuple[str, str], int] = {
     ("POST", MARGIN_TYPE): 1,
     ("GET", POSITION_MODE): 30,
     ("POST", POSITION_MODE): 1,
+    ("GET", MULTI_ASSETS): 30,
     ("POST", LISTEN_KEY): 1,
     ("PUT", LISTEN_KEY): 1,
     ("DELETE", LISTEN_KEY): 1,
@@ -85,4 +88,6 @@ def weight(method: str, path: str, params: dict[str, object] | None = None) -> i
         return 1 if has_symbol else 10
     if path == OPEN_ORDERS:
         return 1 if has_symbol else 40
+    if path == TRADING_STATUS:
+        return 1 if has_symbol else 10
     return _FIXED.get((method, path), 1)

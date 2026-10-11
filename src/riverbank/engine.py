@@ -31,6 +31,7 @@ from riverbank.core.events import (
     MarkPrice,
     OrderAck,
     OrderUpdate,
+    ReconSnapshot,
     StreamStatus,
     Timer,
     UserStreamStatus,
@@ -39,7 +40,7 @@ from riverbank.core.models import BookStatus, Fill, Order, OrderStatus, RiskEven
 from riverbank.features.fair_value import FairValue
 from riverbank.marketdata.market_state import MarketState
 from riverbank.ops.logging import get_logger
-from riverbank.orders.client_ids import ClientIdAllocator
+from riverbank.orders.client_ids import ClientIdAllocator, is_ours
 from riverbank.orders.manager import Command, OrderManager
 from riverbank.orders.positions import PositionBook
 from riverbank.quoting.engine import QuoteInputs, QuoterState, compute_quotes
@@ -72,6 +73,13 @@ class Venue:
     uptime: dict[str, list[int]] = field(default_factory=dict)
     fills: int = 0
     paused_until: int = 0  # e.g. waiting for reconciliation after a user-stream reconnect
+    gates: list[Callable[[str, int], str | None]] = field(default_factory=list)  # -> reason to pull, or None
+    recon_request: Callable[[], None] | None = None
+    liq: dict[str, float] = field(default_factory=dict)
+    last_fill_ts: dict[str, int] = field(default_factory=dict)
+    recon_streak: dict[str, int] = field(default_factory=dict)
+    recon_mismatches: int = 0
+    recon_unresolved: set[str] = field(default_factory=set)
 
 
 class Engine:
@@ -158,6 +166,8 @@ class Engine:
     def add_real_venue(self, name: str, fill_mode: str, gateway: Any, equity: float, **risk_kw: Any) -> Venue:
         v = self._make_venue(name, "real", fill_mode, equity, gateway.submit, **risk_kw)
         v.gateway = gateway
+        v.risk.liq_price = lambda s, v=v: v.liq.get(s, 0.0)
+        v.orders.external_listeners.append(lambda ev, v=v: self._on_external_fill(v, ev))
         return v
 
     def set_symbols(self, venue: str, symbols: Iterable[str]) -> None:
@@ -243,6 +253,9 @@ class Engine:
             return
         if isinstance(ev, UserStreamStatus):
             self._on_user_stream(ev)
+            return
+        if isinstance(ev, ReconSnapshot):
+            self._on_recon(ev)
             return
         prev_mark = None
         if isinstance(ev, MarkPrice):
@@ -362,6 +375,14 @@ class Engine:
         if risk_state is RiskState.REDUCE_ONLY:
             units = max(units, 1)
         user_ok = v.user_stream_ok and now >= v.paused_until
+        for gate in v.gates:
+            blocked = gate(sym, now)
+            if blocked:
+                if v.last_reason.get(sym) != blocked:
+                    log.info("quote_state", venue=v.name, symbol=sym, reason=blocked)
+                    v.last_reason[sym] = blocked
+                v.orders.sync_quotes(sym, [], spec, now, self.mark(sym))
+                return
         inp = QuoteInputs(spec, feats, pos, order_qty, units, risk_state, m.status, now, user_ok,
                           m.mark.next_funding_ms if m.mark else 0, m.prev_funding_ms, self.mark(sym))
         dec = compute_quotes(q, inp, v.quoter.setdefault(sym, QuoterState()))
@@ -387,6 +408,7 @@ class Engine:
 
     def _on_fill(self, v: Venue, fill: Fill, order: Order) -> None:
         v.positions.apply_fill(fill)
+        v.last_fill_ts[fill.symbol] = fill.ts
         v.markouts.on_fill(fill, v.name)
         v.fills += 1
         if self.metrics is not None:
@@ -485,15 +507,37 @@ class Engine:
     # ---- real venue user data (demo/live) ----
 
     def _on_account_update(self, ev: AccountUpdate) -> None:
+        """Wallet balance always; position amounts only for non-ORDER reasons (fills already applied them
+        from ORDER_TRADE_UPDATE; event types are not ordered relative to each other)."""
         v = self.venues.get(ev.venue)
         if v is None:
             return
+        if "USDT" in ev.balances:
+            v.positions.wallet_balance = float(ev.balances["USDT"])
+        if ev.reason == "FUNDING_FEE":
+            log.info("funding_fee", venue=v.name, balances={k: str(b) for k, b in ev.balances.items()})
         for p in ev.positions:
+            if ev.reason in ("ORDER", "FUNDING_FEE"):
+                continue
             before = v.positions.qty(p.symbol)
             v.positions.adopt(p.symbol, p.qty, p.entry_price, ev.recv_ts)
-            if before != p.qty and ev.reason not in ("ORDER", "FUNDING_FEE"):
+            if before != p.qty:
                 log.warning("position_changed_externally", venue=v.name, symbol=p.symbol, before=str(before),
                             after=str(p.qty), reason=ev.reason)
+                if self.alerts is not None:
+                    self.alerts.send("WARN", "position_external", f"{v.name} {p.symbol} {before}->{p.qty} "
+                                                                   f"({ev.reason})")
+
+    def _on_external_fill(self, v: Venue, ev: OrderUpdate) -> None:
+        """A fill on an order that is not ours (liquidation, ADL, manual): follow it and alert."""
+        f = Fill(ev.T or ev.recv_ts, ev.symbol, Side(ev.side), ev.last_fill_price, ev.last_fill_qty, ev.fee,
+                 ev.is_maker, v.fill_mode, ev.client_id, self.mid(ev.symbol), str(ev.trade_id), "external")
+        v.positions.apply_fill(f)
+        v.last_fill_ts[ev.symbol] = f.ts
+        log.error("external_fill", venue=v.name, symbol=ev.symbol, client_id=ev.client_id, exec_type=ev.exec_type)
+        if self.alerts is not None:
+            self.alerts.send("CRITICAL", "external_fill", f"{v.name} {ev.symbol} {ev.side} {ev.last_fill_qty} "
+                                                          f"@ {ev.last_fill_price} ({ev.client_id or ev.exec_type})")
 
     def _on_user_stream(self, ev: UserStreamStatus) -> None:
         v = self.venues.get(ev.venue)
@@ -504,6 +548,76 @@ class Engine:
             v.orders.cancel_all(ev.recv_ts, None, "user_stream_down")
             if self.alerts is not None:
                 self.alerts.send("WARN", "user_stream_down", f"{v.name}: {ev.detail}")
+        else:
+            # (Re)connected: fills may have been missed -> quote only after a clean reconciliation.
+            v.paused_until = 2**62
+            if v.recon_request is not None:
+                v.recon_request()
+
+    def _on_recon(self, ev: ReconSnapshot) -> None:
+        """Compare exchange state with ours (SPEC §5.5). Mismatch: cancel symbol, adopt exchange, alert."""
+        v = self.venues.get(ev.venue)
+        if v is None:
+            return
+        now = ev.recv_ts
+        grace = self.cfg.ops.recon_grace_ms
+        if ev.wallet_balance is not None:
+            v.positions.wallet_balance = ev.wallet_balance
+        for sym, (_, _, liq) in ev.positions.items():
+            v.liq[sym] = float(liq)
+        ex_open = {str(o.get("clientOrderId", "")): o for o in ev.open_orders}
+        issues: dict[str, list[str]] = {}
+        for cid, o in ex_open.items():
+            if not is_ours(cid):
+                continue
+            local = v.orders.orders.get(cid)
+            age_ok = ev.requested_ts - int(o.get("updateTime", o.get("time", 0)) or 0) > grace
+            if (local is None or local.status.is_terminal) and age_ok:
+                issues.setdefault(str(o["symbol"]), []).append(f"unknown_open_order {cid}")
+        for o in v.orders.live_orders():
+            if (o.status in (OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED) and o.client_id not in ex_open
+                    and ev.requested_ts - o.ts_updated > grace):
+                issues.setdefault(o.symbol, []).append(f"missing_order {o.client_id}")
+        for sym in sorted(set(ev.positions) | set(v.positions.positions)):
+            ex_qty = ev.positions.get(sym, (Decimal(0), Decimal(0), Decimal(0)))[0]
+            local_qty = v.positions.qty(sym)
+            if ex_qty != local_qty and ev.requested_ts - v.last_fill_ts.get(sym, 0) > grace:
+                issues.setdefault(sym, []).append(f"position local={local_qty} exchange={ex_qty}")
+        for sym, details in sorted(issues.items()):
+            v.recon_mismatches += 1
+            v.recon_unresolved.add(sym)
+            streak = v.recon_streak[sym] = v.recon_streak.get(sym, 0) + 1
+            detail = "; ".join(details)[:500]
+            log.error("RECON_MISMATCH", venue=v.name, symbol=sym, detail=detail, streak=streak)
+            if self.repo is not None:
+                self.repo.insert_recon(now, v.name, sym, "RECON_MISMATCH", detail)
+            if self.metrics is not None:
+                self.metrics.recon_mismatch.labels(v.name, sym).inc()
+            if self.alerts is not None:
+                self.alerts.send("CRITICAL", "recon_mismatch", f"{v.name} {sym}: {detail}")
+            # cancel everything of ours on the symbol (known and unknown), then adopt exchange state
+            for o in v.orders.live_orders(sym):
+                if o.client_id in ex_open:
+                    v.orders.cancel(o, now, "recon")
+                elif o.status in (OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED):
+                    v.orders.resolve(o.client_id, OrderStatus.CANCELED, o.filled_qty, now)
+            for cid, o in ex_open.items():
+                if is_ours(cid) and str(o["symbol"]) == sym and cid not in v.orders.orders:
+                    v.orders.adopt_and_cancel(o, now)
+            qty, entry, _ = ev.positions.get(sym, (Decimal(0), Decimal(0), Decimal(0)))
+            v.positions.adopt(sym, qty, entry, now)
+            if streak >= 3:
+                v.risk.halt(f"reconciliation mismatch unresolved for 3 checks on {sym}: {detail}"[:300], now)
+        for sym in sorted(v.recon_unresolved - set(issues)):
+            v.recon_unresolved.discard(sym)
+            v.recon_streak.pop(sym, None)
+            log.warning("recon_resolved", venue=v.name, symbol=sym)
+            if self.repo is not None:
+                self.repo.resolve_recon(now, v.name, sym)
+        for sym in set(v.recon_streak) - set(issues):
+            v.recon_streak.pop(sym, None)
+        if v.paused_until > now and not issues:
+            v.paused_until = 0  # clean reconciliation after a reconnect: resume quoting
 
     # ---- persistence / metrics ----
 

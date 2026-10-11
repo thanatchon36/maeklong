@@ -172,3 +172,16 @@ class OrderAck:
     code: int | None = None
     msg: str = ""
     raw: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ReconSnapshot:
+    """Exchange state fetched over REST by the reconciler (handled by the engine in order)."""
+
+    venue: str
+    requested_ts: int
+    recv_ts: int
+    open_orders: list[dict[str, object]]
+    positions: dict[str, tuple[Decimal, Decimal, Decimal]]  # symbol -> (qty, entry, liquidation price)
+    wallet_balance: float | None = None
+    margin_balance: float | None = None

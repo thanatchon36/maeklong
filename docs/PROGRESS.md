@@ -15,7 +15,7 @@ session, so no signed call was made at all).
 | M1 market data gateway, order book, recorder | done | done | M1 |
 | M2 universe screener | done | done | M2 |
 | M3 fair value, quoting, paper fills, analytics, shadow | done | done | M3 |
-| M4 order manager, rate limiter, reconciler, dead-man, risk → demo | pending | | |
+| M4 order manager, rate limiter, reconciler, dead-man, risk → demo | done | done | M4 |
 | M5 live small (gated) + shadow-vs-live gap report | pending | | |
 | M6 hedger + beta | pending | | |
 | M7 auto promotion/demotion, multi-level quoting | pending | | |
@@ -85,9 +85,31 @@ session, so no signed call was made at all).
   REDUCE_ONLY immediately → leverage setting 2 (OPEN_QUESTIONS B19); requote churn reduced by an asymmetric
   requote throttle (B18); order-size reference price (B20); O(n) open-order scan → index (5× faster replay).
 
+## M4 — done
+
+- `orders/gateway.py` (REST execution: 503-unknown → UNKNOWN + query, never resent; 503/internal → retry
+  200/400/800/1600 ms; -1008 → back-off with cancels/reduce-only exempt; 429/418 → limiter halt + venue HALT;
+  -5022 post-only = normal reject), `exchange/user_stream.py` (listenKey lifecycle, `/private` route, parsing),
+  `orders/reconciler.py` + `Engine._on_recon` (RECON_MISMATCH → cancel symbol, adopt exchange state, alert,
+  resolve; 3 consecutive → HALT), `orders/deadman.py` (per-symbol countdownCancelAll heartbeats + quoting gate),
+  `orders/live_venue.py` (startup checks, trading-rules monitor, time sync, clean shutdown),
+  `tools/{cancel_all,flatten_all,_exchange_cli,kill_drill,demo_acceptance}.py`, `tools/run_demo.sh`,
+  `config/demo.yaml`.
+- Tests (`tests/integration/fake_binance.py` = in-process fake exchange): startup checks (one-way switch,
+  isolated/leverage, stale rb-* cancelled, foreign orders untouched, refuse Multi-Assets / higher maker fee);
+  quoting → fill via user stream → position; clean shutdown cancels everything + disarms dead-man; 503-unknown
+  executed (resolved, not resent) and not executed (→ REJECTED after query grace); 429 → HALTED + persisted +
+  traffic halted ≥ 60 s; user-stream drop → cancel all → reconnect → recon → resume; **process kill → exchange
+  dead-man cancels**; recon mismatch (silent position + ghost rb order) → cancel/adopt/resolve; market-data loss
+  → quotes pulled; kill switch < 1 s with cancels; standalone cancel_all/flatten_all (dry run, execute, live gate);
+  rate limiter windows/headers/halt; user-stream payload parsing; trading-rules monitor.
+- Not run: signed calls against demo (no demo API keys in this session) — see pending table.
+
 ## Pending live-time validation
 
 | Acceptance | How to run | Report |
 |---|---|---|
 | M1: 24 h on 20 symbols, no undetected gaps, L1–L5 ≥ 99.9 %, Parquet readable | `tools/run_m1_validation.sh` (env: SYMBOLS, HOURS) | `reports/m1-validation/report.md` (+ `report.interim.md` every 10 min) |
 | M3: 7-day shadow run on candidates, daily markout/PnL reports, deterministic replay | `tools/run_shadow.sh` for ≥ 7 days, then `uv run python tools/shadow_acceptance.py --start D0 --end D6` | `reports/YYYY-MM-DD/report.md` daily + `reports/m3-acceptance/report.md` |
+| M4: 72 h demo run, zero unresolved RECON_MISMATCH, fault-injection tests pass, kill switch < 1 s | set DEMO keys, `tools/run_demo.sh` for ≥ 72 h; then `tools/kill_drill.py --db state/demo/riverbank.sqlite`; then `tools/demo_acceptance.py` | `reports/m4-acceptance/report.md` |
+| M4: first signed contact with demo (never done here: no demo keys) | as above; watch the `real_venue_ready` log line and `/private` user stream connect | logs |

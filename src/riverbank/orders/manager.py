@@ -88,6 +88,7 @@ class OrderManager:
         self._fills_seen: OrderedDict[tuple[str, int], None] = OrderedDict()
         self.fill_listeners: list[FillListener] = []
         self.unknown_listeners: list[Callable[[Order], None]] = []
+        self.external_listeners: list[Callable[[OrderUpdate], None]] = []
         self.rejects: dict[str, int] = {}
         self.post_only_rejects = 0
         self.placed = 0
@@ -184,6 +185,10 @@ class OrderManager:
         order = self.orders.get(ev.client_id)
         if order is None:
             if not is_ours(ev.client_id):
+                # Not our order (liquidation 'autoclose-*', ADL, manual): positions must still follow it.
+                if ev.exec_type in ("TRADE", "CALCULATED") and ev.last_fill_qty > 0:
+                    for ext in self.external_listeners:
+                        ext(ev)
                 return None
             order = Order(ev.client_id, ev.exchange_id, ev.symbol, Side(ev.side), ev.price, ev.qty, Decimal(0),
                           S.UNKNOWN, ev.recv_ts, ev.recv_ts, reduce_only=ev.reduce_only, reason="adopted")
@@ -235,7 +240,8 @@ class OrderManager:
                 if ev.code == -5022:
                     self.post_only_rejects += 1
                 self._set(order, S.REJECTED, ev.recv_ts)
-            elif ev.outcome == "unknown" and not order.status.is_terminal:
+            elif ev.outcome == "unknown" and order.status is S.PENDING_NEW:
+                # Only while unconfirmed: if the stream already reported the order, it is the truth.
                 self._set(order, S.UNKNOWN, ev.recv_ts)
                 for cb in self.unknown_listeners:
                     cb(order)
@@ -243,12 +249,34 @@ class OrderManager:
             if ev.outcome == "ok" and not order.status.is_terminal:
                 self._set(order, exchange_status(ev.status) if ev.status in ("CANCELED", "FILLED", "EXPIRED")
                           else S.CANCELED, ev.recv_ts)
-            elif ev.outcome in ("not_found", "unknown") and not order.status.is_terminal:
+            elif ev.outcome in ("not_found", "unknown") and order.status is S.PENDING_CANCEL:
                 self._set(order, S.UNKNOWN, ev.recv_ts)
                 for cb in self.unknown_listeners:
                     cb(order)
             elif ev.outcome in ("failed", "rejected") and order.status is S.PENDING_CANCEL:
                 self._set(order, S.PARTIALLY_FILLED if order.filled_qty > 0 else S.NEW, ev.recv_ts)
+        elif ev.action == "query":
+            if order.status.is_terminal:
+                return
+            if ev.outcome == "ok" and ev.status:
+                filled = Decimal(str(ev.raw.get("executedQty", "0")))
+                self.resolve(order.client_id, exchange_status(ev.status), filled, ev.recv_ts)
+            elif ev.outcome == "not_found":
+                # Not found after the in-flight grace period: it never reached the book.
+                never = order.exchange_id is None and order.filled_qty == 0
+                self.resolve(order.client_id, S.REJECTED if never else S.CANCELED, order.filled_qty, ev.recv_ts)
+
+    def adopt_and_cancel(self, raw: dict[str, object], now: int) -> Order:
+        """An open `rb-*` order on the exchange that we do not track (e.g. previous session): cancel it."""
+        cid = str(raw["clientOrderId"])
+        order = Order(cid, int(str(raw.get("orderId", 0))) or None, str(raw["symbol"]), Side(str(raw["side"])),
+                      Decimal(str(raw.get("price", "0"))), Decimal(str(raw.get("origQty", "0"))),
+                      Decimal(str(raw.get("executedQty", "0"))), S.NEW, now, now, reason="adopted")
+        self.orders[cid] = order
+        self._open[cid] = order
+        self._persist(order)
+        self.cancel(order, now, "adopted")
+        return order
 
     def resolve(self, client_id: str, status: OrderStatus, filled: Decimal, now: int) -> None:
         """Apply the result of a REST query for an UNKNOWN order (used by gateway/reconciler)."""

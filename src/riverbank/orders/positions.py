@@ -97,6 +97,8 @@ class PositionBook:
     def equity(self) -> float:
         if self._equity_override is not None:
             return self._equity_override
+        if self.wallet_balance is not None:  # real venue: exchange wallet + live unrealized PnL
+            return self.wallet_balance + sum(self.unrealized(s) for s in self.positions)
         tot = self.initial_equity
         for s, p in self.positions.items():
             tot += float(p.realized_pnl - p.fees + p.funding) + self.unrealized(s)
