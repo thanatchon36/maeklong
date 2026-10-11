@@ -5,7 +5,7 @@ mode: shadow            # demo | shadow | live   (live additionally needs MODE=l
 account:
   fee_maker_bps: 2.0    # demo/live: overridden by GET /fapi/v1/commissionRate at startup
   fee_taker_bps: 5.0
-  leverage: 3
+  leverage: 2           # SPEC sample says 3; 2 keeps liquidation ~46-49 % away (docs/OPEN_QUESTIONS.md B19)
   margin_type: ISOLATED
 
 universe:

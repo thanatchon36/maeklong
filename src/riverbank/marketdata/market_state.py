@@ -15,9 +15,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from riverbank.core.events import AggTrade, BookTicker, DepthDiff, DepthSnapshot, MarkPrice, StreamStatus
+from riverbank.core.events import AggTrade, BookTicker, BookTopN, DepthDiff, DepthSnapshot, MarkPrice, StreamStatus
 from riverbank.core.models import BookStatus
-from riverbank.marketdata.orderbook import BookSync
+from riverbank.marketdata.orderbook import BookSync, SyncState
 
 SnapshotRequester = Callable[[str, int, str], None]
 CheckListener = Callable[[str, bool, str], None]
@@ -116,6 +116,21 @@ class MarketState:
             return False
         m.pending.on_snapshot(ev.last_update_id, ev.bids, ev.asks)
         self._maybe_finish_pending(m)
+        return True
+
+    def on_topn(self, ev: BookTopN) -> bool:
+        """Replay input: the recorded top-N book replaces the local book."""
+        m = self.symbols.get(ev.symbol)
+        if m is None:
+            return False
+        s = m.sync
+        s.book.load(ev.bids, ev.asks)
+        s.state = SyncState.SYNCED
+        s.need_snapshot = False
+        s.snapshot_requested = False
+        s.last_u = ev.last_update_id
+        m.last_md_ts = max(m.last_md_ts, ev.recv_ts)
+        m.last_refresh_ts = ev.recv_ts
         return True
 
     def on_book_ticker(self, ev: BookTicker) -> bool:

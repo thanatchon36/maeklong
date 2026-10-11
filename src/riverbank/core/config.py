@@ -22,7 +22,9 @@ class _Strict(BaseModel):
 class AccountCfg(_Strict):
     fee_maker_bps: float = Field(2.0, ge=-5, le=50)
     fee_taker_bps: float = Field(5.0, ge=0, le=50)
-    leverage: int = Field(3, ge=1, le=125)
+    # SPEC sample: 3. With isolated margin, 3x puts a short's liquidation only ~30.1 % away, so the
+    # 30 % min-liquidation-distance rule would bind immediately (OPEN_QUESTIONS B19): 2x is used.
+    leverage: int = Field(2, ge=1, le=125)
     margin_type: Literal["ISOLATED"] = "ISOLATED"
 
 
@@ -59,6 +61,7 @@ class QuotingCfg(_Strict):
     vol_mult: float = Field(1.0, ge=0)
     skew_k: float = Field(0.5, ge=0)
     requote_ticks: int = Field(1, ge=1)
+    min_requote_interval_ms: int = Field(1000, ge=0)  # only for moves toward the touch (OPEN_QUESTIONS B18)
     vol_kill_bps: float = Field(50, gt=0)
     cooldown_s: int = Field(60, ge=0)
     toxic_markout_bps: float = -3.0

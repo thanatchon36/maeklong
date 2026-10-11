@@ -14,7 +14,7 @@ session, so no signed call was made at all).
 | M0 scaffold, config, logging, exchangeInfo, SymbolSpec | done | done | M0 |
 | M1 market data gateway, order book, recorder | done | done | M1 |
 | M2 universe screener | done | done | M2 |
-| M3 fair value, quoting, paper fills, analytics, shadow | pending | | |
+| M3 fair value, quoting, paper fills, analytics, shadow | done | done | M3 |
 | M4 order manager, rate limiter, reconciler, dead-man, risk → demo | pending | | |
 | M5 live small (gated) + shadow-vs-live gap report | pending | | |
 | M6 hedger + beta | pending | | |
@@ -60,8 +60,34 @@ session, so no signed call was made at all).
 - Acceptance: `uv run python tools/screen_once.py` against the live public API (2026-10-12) produced a ranked
   list of 20 CANDIDATEs with all metrics; BTCUSDT/ETHUSDT reported as excluded (hedge_only).
 
+## M3 — done
+
+- `features/fair_value.py`, `quoting/engine.py` (A-S reservation/half-spread, guards, toxicity ladder, funding
+  guard, REDUCE_ONLY quoting, multi-level ready), `sim/paper_fills.py` (conservative fill model),
+  `orders/{client_ids,state_machine,manager,positions}.py` (venue-agnostic order manager shared with M4),
+  `risk/{limits,engine,killswitch}.py` (full pre-trade checks + periodic evaluation; HALT persistence),
+  `analytics/{markout,pnl,report}.py`, `storage/sqlite.py`, `engine.py`, `sim/replay.py`, `main.py` (shadow),
+  `ops/{alerts,metrics}.py`, tools `replay.py`, `run_shadow.sh`, `shadow_acceptance.py`, `clear_halt.py`.
+- Note: the order manager, state machine and risk engine were needed for shadow (every intent passes risk.check),
+  so their venue-agnostic parts landed in M3; M4 adds the real exchange gateway, reconciler, dead-man, user stream.
+- Tests: fair value math (EWMA σ closed form, micro, imbalance, flow decay); quoting (A-S math, floor/ceil, skew,
+  inventory caps, never-cross, every guard, vol kill/cooldown, toxicity ladder up/down, funding pull/widen,
+  reduce-only, multi-level, PERCENT_PRICE); paper fills (latency, queue, nq/RPI, trade-through, unexplained
+  decrease, improving price, post-only reject at arrival, book-cross fill, cancel/after-fill, taker fee); state
+  machine table; order manager (cancel-then-new requote, stream-before-ack, UNKNOWN path, fill during cancel,
+  duplicate fills, post-only reject, risk veto); risk (one breach test per limit, daily loss soft/hard + 50% alert,
+  drawdown, hysteresis, liquidation distance, sticky HALT); markout/stats/PnL by hand; replay determinism, latency
+  sensitivity, report generation, paper funding, kill switch → cancel + flatten (synthetic recorded dataset).
+- Live shadow smoke runs (public data only, 2026-10-12): 8 candidates, fills simulated, daily report generated;
+  `touch KILL` → HALTED in **181 ms** with 13 cancels; restart refused while KILL/HALT present; `clear_halt.py`.
+  Replay of the recorded live data: identical digest on two runs (`tools/replay.py --check-determinism`).
+- Findings fixed during the smoke runs: SPEC leverage 3 + 30 % min liquidation distance puts every short in
+  REDUCE_ONLY immediately → leverage setting 2 (OPEN_QUESTIONS B19); requote churn reduced by an asymmetric
+  requote throttle (B18); order-size reference price (B20); O(n) open-order scan → index (5× faster replay).
+
 ## Pending live-time validation
 
 | Acceptance | How to run | Report |
 |---|---|---|
 | M1: 24 h on 20 symbols, no undetected gaps, L1–L5 ≥ 99.9 %, Parquet readable | `tools/run_m1_validation.sh` (env: SYMBOLS, HOURS) | `reports/m1-validation/report.md` (+ `report.interim.md` every 10 min) |
+| M3: 7-day shadow run on candidates, daily markout/PnL reports, deterministic replay | `tools/run_shadow.sh` for ≥ 7 days, then `uv run python tools/shadow_acceptance.py --start D0 --end D6` | `reports/YYYY-MM-DD/report.md` daily + `reports/m3-acceptance/report.md` |
