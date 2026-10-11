@@ -1,0 +1,5 @@
+# Operator-maintained exclusions (e.g. announced delistings). Symbols listed here are never quoted.
+# Example:
+#   symbols:
+#     - XYZUSDT   # delisting announced 2026-10-01
+symbols: []
