@@ -50,6 +50,8 @@ from riverbank.sim.paper_fills import PaperExchange
 
 log = get_logger("engine")
 
+MD_DISCONNECT_ALERT_MS = 30_000  # SPEC §5.11: alert on a market-data disconnect lasting > 30 s
+
 
 @dataclass
 class Venue:
@@ -125,6 +127,7 @@ class Engine:
         self.fill_hooks: list[Callable[[Venue, Fill, Order], None]] = []
         self.errors = 0
         self._size_cache: dict[str, tuple[float, Any]] = {}  # symbol -> (reference mid, OrderSize)
+        self._md_down: dict[tuple[str, tuple[str, ...]], list[int]] = {}  # (route, symbols) -> [down_since, alerted]
         for s in list(market.symbols):
             self.ensure_symbol(s)
 
@@ -153,10 +156,11 @@ class Engine:
         self.venues[name] = v
         return v
 
-    def add_paper_venue(self, name: str = "paper", fill_mode: str = "shadow", equity: float | None = None) -> Venue:
+    def add_paper_venue(self, name: str = "paper", fill_mode: str = "shadow", equity: float | None = None,
+                        **risk_kw: Any) -> Venue:
         holder: dict[str, PaperExchange] = {}
         v = self._make_venue(name, "paper", fill_mode, equity or self.cfg.ops.shadow_equity_usdt,
-                             lambda cmd: holder["px"].submit(cmd, self.clock.now_ms()))
+                             lambda cmd: holder["px"].submit(cmd, self.clock.now_ms()), **risk_kw)
         px = PaperExchange(name, self.market, self._on_exec_event, latency_ms=self.cfg.ops.sim_latency_ms,
                            fee_maker_bps=self.cfg.account.fee_maker_bps, fee_taker_bps=self.cfg.account.fee_taker_bps)
         holder["px"] = px
@@ -257,6 +261,8 @@ class Engine:
         if isinstance(ev, ReconSnapshot):
             self._on_recon(ev)
             return
+        if isinstance(ev, StreamStatus):
+            self._track_md_status(ev)
         prev_mark = None
         if isinstance(ev, MarkPrice):
             m = self.market.get(ev.symbol)
@@ -348,6 +354,29 @@ class Engine:
             self._snapshot_pnl(now)
         if every_1s:
             self._update_metrics()
+            self._check_md_down(now)
+
+    # ---- market-data disconnect alerts ----
+
+    def _track_md_status(self, ev: StreamStatus) -> None:
+        key = (ev.route, ev.symbols)
+        if ev.detail == "unsubscribed":  # planned removal, not a disconnect
+            self._md_down.pop(key, None)
+        elif not ev.connected:
+            self._md_down.setdefault(key, [ev.recv_ts, 0])
+        else:
+            down = self._md_down.pop(key, None)
+            if down is not None and down[1] and self.alerts is not None:
+                self.alerts.send("INFO", "md_reconnected", f"{ev.route} {','.join(ev.symbols)} back after "
+                                                           f"{(ev.recv_ts - down[0]) / 1000:.0f} s")
+
+    def _check_md_down(self, now: int) -> None:
+        for (route, syms), down in self._md_down.items():
+            if not down[1] and now - down[0] > MD_DISCONNECT_ALERT_MS:
+                down[1] = 1
+                if self.alerts is not None:
+                    self.alerts.send("WARN", "md_disconnect", f"{route} {','.join(syms)} down for "
+                                                              f"{(now - down[0]) / 1000:.0f} s")
 
     # ---- quoting ----
 

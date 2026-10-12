@@ -126,6 +126,17 @@ session, so no signed call was made at all).
 - Also: `config/demo.yaml` → `ops.kill_file: KILL.demo`; `tools/shadow_acceptance.py` 7-day check now passes
   for a full `--start D0 --end D6` window (1 h edge tolerance; test added).
 
+## SPEC completeness fixes (2026-10-12)
+
+- SPEC §5.11: market-data disconnect alert. The engine tracks each (route, symbols) connection; down > 30 s
+  → one `md_disconnect` WARN, recovery → `md_reconnected` INFO; planned unsubscribes are ignored
+  (`tests/unit/test_md_disconnect_alert.py`). Previously only the user stream alerted.
+- OPEN_QUESTIONS B6 for shadow: paper-venue HALTs (daily loss, drawdown, exceptions) are now persisted like
+  real-venue HALTs, so a crash/restart cannot resume shadow quoting (`tests/unit/test_shadow_halt.py`). Replay
+  does not persist.
+- Known remaining gaps (by milestone): ACTIVE/DEMOTED promotion logic and shadow-vs-live gap report (M5),
+  hedger (M6; `hedge.enabled` currently has no effect), auto-rotation (M7).
+
 ## Pending live-time validation
 
 | Acceptance | How to run | Report |

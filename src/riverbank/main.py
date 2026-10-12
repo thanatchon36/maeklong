@@ -144,9 +144,11 @@ class App:
         return candidates(rows)
 
     async def _setup_venues(self, universe: list[str]) -> None:
-        assert self.engine is not None
+        assert self.engine is not None and self.repo is not None
         if self.mode is Mode.SHADOW:
-            self.engine.add_paper_venue("paper", "shadow")
+            repo = self.repo
+            self.engine.add_paper_venue("paper", "shadow",
+                                        persist_halt=lambda reason: persist_halt(repo, reason, self.mode.value))
             self.engine.set_symbols("paper", universe)
             return
         from riverbank.orders.live_venue import setup_real_venue  # demo/live wiring (M4/M5)
