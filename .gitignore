@@ -14,3 +14,4 @@ logs/
 *.key
 secrets/
 KILL
+.DS_Store
