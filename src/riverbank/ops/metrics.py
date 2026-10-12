@@ -29,5 +29,5 @@ class Metrics:
                                       registry=r)
         self.errors = Counter("rb_errors_total", "Errors by kind", ["kind"], registry=r)
 
-    def serve(self, port: int) -> None:
-        start_http_server(port, registry=self.registry)
+    def serve(self, port: int, addr: str = "0.0.0.0") -> None:
+        start_http_server(port, addr=addr, registry=self.registry)

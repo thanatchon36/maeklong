@@ -77,6 +77,7 @@ ops:
   deadman_countdown_s: 30
   sim_latency_ms: 150
   metrics_port: 9110
+  metrics_addr: 172.17.0.1   # Docker bridge (docker0) only, never the internet; check: ip -4 addr show docker0
   log_level: INFO
   data_dir: data/live
   state_dir: state/live

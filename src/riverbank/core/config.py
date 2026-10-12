@@ -129,6 +129,8 @@ class OpsCfg(_Strict):
     sim_latency_ms: int = Field(150, ge=0)
     recon_grace_ms: int = Field(3000, ge=0)
     metrics_port: int = 9108
+    # 0.0.0.0 inside a container (compose network only); a bot on the host binds the Docker bridge (RUNBOOK §10.4)
+    metrics_addr: str = "0.0.0.0"
     log_level: str = "INFO"
     log_levels: Mapping[str, str] = Field(default_factory=dict)
     data_dir: str = "data"

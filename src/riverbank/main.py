@@ -99,8 +99,11 @@ class App:
         self.rest.header_hook = self.limiter.on_headers
         self._save_exchange_info()
         metrics = Metrics()
-        with contextlib.suppress(OSError):
-            metrics.serve(ops.metrics_port)
+        try:
+            metrics.serve(ops.metrics_port, ops.metrics_addr)
+        except OSError as e:  # keep trading without metrics, but say so (e.g. wrong bridge address)
+            log.warning("metrics_unavailable", addr=ops.metrics_addr, port=ops.metrics_port, error=repr(e))
+            self.alerts.send("WARN", "metrics_unavailable", f"{ops.metrics_addr}:{ops.metrics_port}: {e!r}")
         self.screener = Screener(cfg, self.rest, limiter=self.limiter)
         universe = await self._initial_universe()
         hedge = list(cfg.hedge.instruments)
