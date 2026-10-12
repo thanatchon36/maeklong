@@ -153,3 +153,57 @@ async def test_live_selection_uses_promoted_symbols_once_approved(tmp_path, monk
     app.mode = Mode.DEMO  # demo keeps quoting the configured universe
     assert await live_venue.select_real_symbols(app, ["AAAUSDT", "BBBUSDT"]) == ["AAAUSDT", "BBBUSDT"]
     repo.close()
+
+
+# ---- M7: periodic rotation ----
+
+def test_demotion_needs_a_full_window_and_negative_upper_bound():
+    from riverbank.universe.rotation import demotion_check
+
+    assert demotion_check([-5.0, -6.0, -4.0], 4)[0] is False         # never decide on fewer fills
+    demote, st, _ = demotion_check([9.0] * 10 + [-5.0, -6.0, -4.0, -5.0], 4)
+    assert demote and st.n == 4 and st.mean + st.se < 0              # only the last window counts
+    assert demotion_check([-5.0, 5.0, -4.0, 3.0], 4)[0] is False     # mean + SE ≥ 0: keep
+
+
+def test_rotate_demotes_bad_symbol_and_fills_the_slot():
+    from riverbank.universe.rotation import rotate
+
+    u = ucfg(live_symbols=["AAAUSDT", "BBBUSDT"], max_active_symbols=1, demotion_window_fills=4)
+    active, decisions = rotate(["AAAUSDT"], {"BBBUSDT": GOOD}, {"AAAUSDT": [-5.0, -6.0, -4.0, -5.0]}, u,
+                               ["AAAUSDT", "BBBUSDT"], {"AAAUSDT": ("ACTIVE", T0)}, T0 + H)
+    assert active == ["BBBUSDT"]
+    assert [(d.symbol, d.from_state, d.to_state) for d in decisions] == [
+        ("AAAUSDT", "ACTIVE", "DEMOTED"), ("BBBUSDT", "CANDIDATE", "ACTIVE")]
+
+
+def test_rotate_keeps_good_active_and_respects_cap():
+    from riverbank.universe.rotation import rotate
+
+    u = ucfg(live_symbols=["AAAUSDT", "BBBUSDT"], max_active_symbols=1, demotion_window_fills=4)
+    active, decisions = rotate(["AAAUSDT"], {"BBBUSDT": BETTER}, {"AAAUSDT": [1.0, 2.0, 1.0, 2.0]}, u,
+                               ["AAAUSDT", "BBBUSDT"], {"AAAUSDT": ("ACTIVE", T0)}, T0 + H)
+    assert active == ["AAAUSDT"] and decisions == []  # no churn: a better candidate waits for a free slot
+
+
+def test_rotate_drops_symbols_that_left_the_universe():
+    from riverbank.universe.rotation import rotate
+
+    active, decisions = rotate(["AAAUSDT"], {}, {}, ucfg(live_symbols=["AAAUSDT"]), [],
+                               {"AAAUSDT": ("ACTIVE", T0)}, T0 + H)
+    assert active == []
+    assert [(d.from_state, d.to_state, d.reason) for d in decisions] == [("ACTIVE", "CANDIDATE", "left universe")]
+
+
+def test_rotate_returns_demoted_to_candidate_after_cooldown_once():
+    from riverbank.universe.rotation import rotate
+
+    u = ucfg(live_symbols=["AAAUSDT"], demotion_cooldown_h=24)
+    states = {"AAAUSDT": ("DEMOTED", T0 + 10)}
+    assert rotate([], {}, {}, u, ["AAAUSDT"], states, T0 + 23 * H)[1] == []
+    active, decisions = rotate([], {"AAAUSDT": GOOD}, {}, u, ["AAAUSDT"], states, T0 + 25 * H)
+    assert active == []  # its evidence predates the demotion
+    assert [(d.from_state, d.to_state) for d in decisions] == [("DEMOTED", "CANDIDATE")]
+    # recorded as CANDIDATE now, but evidence must still be newer than the demotion
+    states2 = {"AAAUSDT": ("CANDIDATE", T0 + 25 * H)}
+    assert rotate([], {"AAAUSDT": GOOD}, {}, u, ["AAAUSDT"], states2, T0 + 26 * H, {"AAAUSDT": T0 + 10})[0] == []

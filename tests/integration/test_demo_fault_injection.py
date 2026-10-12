@@ -190,6 +190,67 @@ async def test_shadow_twin_quotes_the_same_symbols_without_touching_the_exchange
     await h.stop()
 
 
+def _fills(repo, venue, mode, sym, edges, t0):
+    from riverbank.core.models import Fill, Side
+
+    for i, e in enumerate(edges):
+        f = Fill(t0 + i, sym, Side.BUY, Decimal("1"), Decimal("10"), Decimal("0"), True, mode, f"x-{venue}-{i}", 1.0,
+                 str(i))
+        repo.insert_fill(f, venue)
+        repo.update_markout(venue, f.client_id, f.trade_id, 60, e)
+
+
+async def test_rotation_demotes_and_promotes_with_exchange_setup(tmp_path, monkeypatch):
+    # M7: universe rotates automatically; every change is in universe_decisions and the logs.
+    shadow = SqliteRepository(tmp_path / "shadow.sqlite")
+    _fills(shadow, "paper", "shadow", "XRPUSDT", [3.0, 4.0, 5.0, 4.0], now_ms() - 60_000)
+    shadow.close()
+    h = Harness(tmp_path, monkeypatch)
+    await h.start(universe={"min_fills_for_promotion": 4, "demotion_window_fills": 4, "max_active_symbols": 1,
+                            "live_symbols": [SYM, "XRPUSDT"], "shadow_db": str(tmp_path / "shadow.sqlite")})
+    try:
+        _fills(h.repo, "demo", "demo", SYM, [-5.0, -6.0, -4.0, -5.0], now_ms() - 60_000)
+        h.rt.on_candidates([SYM, "XRPUSDT"])
+        await h.rt.rotate_once(now_ms())
+        assert h.venue.symbols == h.engine.venues["shadow"].symbols == {"XRPUSDT"}
+        assert h.fake.margin["XRPUSDT"] == "ISOLATED" and h.fake.leverage["XRPUSDT"] == 2  # set before quoting
+        rows = h.repo.query("SELECT symbol, from_state, to_state FROM universe_decisions ORDER BY id")
+        assert rows == [(SYM, "ACTIVE", "DEMOTED"), ("XRPUSDT", "CANDIDATE", "ACTIVE")]
+    finally:
+        await h.stop()
+
+
+async def test_rotation_skips_symbol_whose_exchange_setup_fails(tmp_path, monkeypatch):
+    shadow = SqliteRepository(tmp_path / "shadow.sqlite")
+    _fills(shadow, "paper", "shadow", "XRPUSDT", [3.0, 4.0, 5.0, 4.0], now_ms() - 60_000)
+    shadow.close()
+    h = Harness(tmp_path, monkeypatch)
+    await h.start(universe={"min_fills_for_promotion": 4, "live_symbols": ["XRPUSDT"],
+                            "shadow_db": str(tmp_path / "shadow.sqlite")})
+    try:
+        h.fake.inject("POST /fapi/v1/leverage", 400, {"code": -4028, "msg": "Leverage 2 is not valid"})
+        h.rt.on_candidates([SYM, "XRPUSDT"])
+        await h.rt.rotate_once(now_ms())
+        assert "XRPUSDT" not in h.venue.symbols
+        rows = h.repo.query("SELECT symbol, from_state, to_state FROM universe_decisions ORDER BY id")
+        assert rows[-1] == ("XRPUSDT", "ACTIVE", "CANDIDATE")
+    finally:
+        await h.stop()
+
+
+async def test_multi_level_quotes_reach_the_exchange(h):
+    # M7 (optional): levels > 1 works on the real-venue path; configs keep levels: 1.
+    await h.start(quoting={"levels": 2, "level_spacing_bps": 5})
+    await h.wait(lambda: len(h.fake.open_orders(SYM)) == 4, what="two levels per side")
+    orders = h.fake.open_orders(SYM)
+    bids = sorted(Decimal(o["price"]) for o in orders if o["side"] == "BUY")
+    asks = sorted(Decimal(o["price"]) for o in orders if o["side"] == "SELL")
+    assert bids[0] < bids[1] < Decimal(str(ASK)) and Decimal(str(BID)) < asks[0] < asks[1]
+    assert all(o["timeInForce"] == "GTX" for o in orders)
+    await h.stop()
+    assert h.fake.open_orders() == []
+
+
 async def test_503_unknown_executed_is_resolved_not_resent(h):
     h.fake.inject("POST /fapi/v1/order", 503, UNKNOWN_503, still_execute=True)
     await h.start()

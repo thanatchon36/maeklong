@@ -335,6 +335,9 @@ class FakeBinance:
 
     async def h_leverage(self, req: web.Request) -> web.Response:
         p = self._params(req, await req.text())
+        f = self._fault("POST /fapi/v1/leverage")
+        if f is not None:
+            return web.json_response(f[1], status=f[0])
         self.leverage[p["symbol"]] = int(p["leverage"])
         return self._j(req, {"symbol": p["symbol"], "leverage": int(p["leverage"])})
 

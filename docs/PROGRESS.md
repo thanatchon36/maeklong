@@ -18,7 +18,7 @@ session, so no signed call was made at all).
 | M4 order manager, rate limiter, reconciler, dead-man, risk → demo | done | done | M4 |
 | M5 live small (gated) + shadow-vs-live gap report | done (live blocked, B1) | done | M5 |
 | M6 hedger + beta | done | done | M6 |
-| M7 auto promotion/demotion, multi-level quoting | pending | | |
+| M7 auto promotion/demotion, multi-level quoting | done (live-only rotation) | done | M7 |
 
 ## M0 — done
 
@@ -139,6 +139,17 @@ session, so no signed call was made at all).
 - Smoke (shadow, public API only, 75 s): betas from 4,318 one-minute returns, e.g. DOGE 1.31 / XRP 1.26 vs BTC.
 - Live part of the acceptance ("in replay and live") needs the live run: not done.
 
+## M7 — done (code; live acceptance pending with M5)
+
+- `universe/rotation.py`: `demotion_check` (B10), `rotate` (demote, cooldown release, fill free slots; no
+  displacement), shared evidence readers. `orders/live_venue.py`: `configure_symbol` (shared with the startup
+  checks), `RealVenueRuntime.rotate_once` + live-only `_rotation_loop` (decisions in OPEN_QUESTIONS B24).
+- Multi-level quoting: kept at `levels: 1`; the real-venue path is now tested with 2 levels.
+- Tests: rotation unit tests in `tests/unit/test_rotation.py`; in `tests/integration/test_demo_fault_injection.py`
+  rotation demotes + promotes with exchange setup and decision rows, a failed exchange setup skips the symbol,
+  and two quote levels per side reach the fake exchange.
+- Acceptance ("universe rotates automatically with documented decisions in logs") needs the live run: not done.
+
 ## Ops: Docker, monitoring, runbook (2026-10-12, no keys needed)
 
 - `docker/{Dockerfile, Dockerfile.dockerignore, docker-compose.yml, env.example}`: services `shadow`
@@ -169,7 +180,7 @@ session, so no signed call was made at all).
   real-venue HALTs, so a crash/restart cannot resume shadow quoting (`tests/unit/test_shadow_halt.py`). Replay
   does not persist.
 - Known remaining gaps (by milestone): ~~ACTIVE promotion and shadow-vs-live gap report (M5)~~ done,
-  ~~hedger (M6)~~ done, auto-rotation (M7).
+  ~~hedger (M6)~~ done, ~~auto-rotation (M7)~~ done. Remaining: the wall-clock acceptance runs (M1, M3, M4, then M5–M7 live).
 
 ## Pending live-time validation
 

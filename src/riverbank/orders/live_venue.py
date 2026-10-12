@@ -32,7 +32,16 @@ from riverbank.orders.deadman import DeadmanSwitch
 from riverbank.orders.gateway import OrderGateway
 from riverbank.orders.reconciler import Reconciler, fetch_snapshot
 from riverbank.risk.killswitch import persist_halt
-from riverbank.universe.rotation import promoted_symbols
+from riverbank.universe.rotation import (
+    Decision,
+    last_demotions,
+    last_states,
+    live_edges,
+    promoted_symbols,
+    read_shadow_db,
+    record,
+    rotate,
+)
 
 log = get_logger("live_venue")
 
@@ -82,6 +91,16 @@ async def check_api_key_permissions(creds: Credentials, recv_window_ms: int) -> 
     return res
 
 
+async def configure_symbol(rest: RestClient, limiter: Any, sym: str, leverage: int) -> None:
+    """ISOLATED margin + configured leverage; must succeed before a symbol is quoted on a real venue."""
+    try:
+        await _signed(rest, limiter, "POST", ep.MARGIN_TYPE, {"symbol": sym, "marginType": "ISOLATED"})
+    except ApiError as e:
+        if e.code != -4046:  # -4046: already isolated
+            raise
+    await _signed(rest, limiter, "POST", ep.LEVERAGE, {"symbol": sym, "leverage": leverage})
+
+
 async def startup_checks(app: Any, rest: RestClient, creds: Credentials, symbols: list[str]) -> dict[str, Any]:
     cfg, limiter, mode = app.cfg, app.limiter, app.mode
     out: dict[str, Any] = {"symbols": [], "excluded": {}, "canceled": 0}
@@ -113,12 +132,7 @@ async def startup_checks(app: Any, rest: RestClient, creds: Credentials, symbols
         log.warning("commission_rate_unavailable", error=repr(e))
     for sym in symbols:
         try:
-            try:
-                await _signed(rest, limiter, "POST", ep.MARGIN_TYPE, {"symbol": sym, "marginType": "ISOLATED"})
-            except ApiError as e:
-                if e.code != -4046:  # -4046: already isolated
-                    raise
-            await _signed(rest, limiter, "POST", ep.LEVERAGE, {"symbol": sym, "leverage": cfg.account.leverage})
+            await configure_symbol(rest, limiter, sym, cfg.account.leverage)
             out["symbols"].append(sym)
         except ApiError as e:
             out["excluded"][sym] = f"{e.code} {e.msg}"
@@ -186,9 +200,13 @@ class RealVenueRuntime:
         self.app, self.venue, self.rest = app, venue, rest
         self.gateway, self.stream, self.reconciler = gateway, stream, reconciler
         self.deadman, self.monitor = deadman, monitor
+        self.universe: list[str] = sorted(venue.symbols)  # latest screened candidates (live rotation input)
 
     def coroutines(self) -> list[Any]:
-        return [self.stream.run(), self.reconciler.run(), self.deadman.run(), self.monitor.run(), self._time_sync()]
+        out = [self.stream.run(), self.reconciler.run(), self.deadman.run(), self.monitor.run(), self._time_sync()]
+        if self.app.mode is Mode.LIVE:
+            out.append(self._rotation_loop())  # M7; demo keeps its configured list
+        return out
 
     async def _time_sync(self) -> None:
         while True:
@@ -199,8 +217,50 @@ class RealVenueRuntime:
                 log.warning("time_sync_failed", error=repr(e))
 
     def on_candidates(self, cands: list[str]) -> None:
-        """Demo: the real venue quotes the configured symbols only (static list or initial universe)."""
-        return
+        """Screened candidates; live rotation picks ACTIVE symbols from them (demo ignores them)."""
+        self.universe = list(cands)
+
+    def _decide(self, now: int) -> tuple[list[str], list[Decision]]:
+        cfg, repo, v = self.app.cfg, self.app.repo, self.venue
+        evidence = read_shadow_db(cfg.universe, repo.path)
+        rows = repo.query("SELECT symbol, to_state, ts FROM universe_decisions ORDER BY id")
+        edges = live_edges(repo, v.name, cfg.universe.promotion_horizon_s)
+        return rotate(sorted(v.symbols), evidence, edges, cfg.universe, self.universe, last_states(rows), now,
+                      last_demotions(rows))
+
+    async def rotate_once(self, now: int) -> None:
+        """M7: demote / promote (universe/rotation.py); new ACTIVE symbols are configured on the exchange first."""
+        app, v = self.app, self.venue
+        active, decisions = await asyncio.to_thread(self._decide, now)
+        for sym in [s for s in active if s not in v.symbols]:
+            try:
+                await configure_symbol(self.rest, app.limiter, sym, app.cfg.account.leverage)
+            except ApiError as e:
+                active.remove(sym)
+                decisions.append(Decision(now, sym, "ACTIVE", "CANDIDATE", f"exchange setup failed: {e.code} {e.msg}"
+                                          [:200], 0, float("nan"), float("nan")))
+        record(app.repo, decisions)
+        if decisions and app.alerts is not None:
+            app.alerts.send("INFO", "universe", "; ".join(f"{d.symbol} {d.from_state}->{d.to_state}"
+                                                          for d in decisions))
+        if set(active) != v.symbols:
+            app.engine.set_symbols(v.name, active)
+            app.engine.set_symbols(SHADOW_TWIN, active)
+            pipeline = getattr(app, "pipeline", None)
+            if pipeline is not None:
+                pipeline.set_symbols(app.engine.all_symbols())
+
+    async def _rotation_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.app.cfg.universe.screen_interval_s)
+            try:
+                await self.rotate_once(_now_ms())
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # keep the current set; the risk engine still bounds every symbol
+                log.error("rotation_failed", error=repr(e))
+                if self.app.alerts is not None:
+                    self.app.alerts.send("WARN", "rotation_failed", repr(e)[:300])
 
     async def shutdown(self) -> None:
         """SPEC §11.4: cancel all rb-* orders on shutdown; then stop dead-man timers and the stream."""
