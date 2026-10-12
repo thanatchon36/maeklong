@@ -117,6 +117,11 @@ session, so no signed call was made at all).
   positives: the REST snapshot was taken while our order was open and its cancel confirmed before the snapshot
   was processed. A locally terminal order now counts as "unknown" only if it was terminal before the snapshot
   was requested (`tests/unit/test_recon_race.py`). Both had self-resolved within 30 s.
+- Hedger vs gross limit (first demo run): with ~87 USDT of long inventory every hedge was rejected by
+  `max_gross_exposure` (worst-case gross 117 + a 49 USDT hedge > 150), i.e. the hedger failed exactly when
+  needed, and logged `placed: false` every 5 s. The hedge is now also capped by the remaining gross headroom
+  (`RiskEngine.gross_worst_case`), and a rejected hedge logs `hedge_rejected` with the risk reason once per
+  change. Tests in `tests/unit/test_hedger.py`.
 
 ## M5 — code done; live still blocked (OPEN_QUESTIONS B1)
 

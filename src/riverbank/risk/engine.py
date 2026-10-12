@@ -169,6 +169,15 @@ class RiskEngine:
             total += worst_case_abs_notional(self.positions.qty(s), b, sl, self._mark(s, intent, mark))
         return total
 
+    def gross_worst_case(self) -> float:
+        """Worst-case gross exposure (positions + all open orders filled), as the pre-trade check sees it."""
+        orders = [o for o in self.orders() if o.is_open]
+        total = 0.0
+        for s in sorted(set(self.positions.positions) | {o.symbol for o in orders}):
+            b, sl = open_qty_by_side(orders, s)
+            total += worst_case_abs_notional(self.positions.qty(s), b, sl, self.positions.mark(s))
+        return total
+
     def _net_beta_worst_case(self, orders: list[Order], intent: QuoteIntent, mark: float) -> tuple[float, float]:
         lo = hi = 0.0
         for s in self._symbols(orders, intent.symbol):

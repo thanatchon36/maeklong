@@ -141,3 +141,21 @@ def test_on_timer_respects_eval_interval():
     for t in range(0, 12_000, 100):
         h.on_timer(T0 + t)
     assert calls == [T0, T0 + 5000, T0 + 10_000]
+
+
+def test_hedge_size_capped_by_gross_headroom():
+    # Seen on demo: a full-size hedge pushed worst-case gross over max_gross_exposure_usdt and the risk engine
+    # rejected every hedge exactly when inventory was large. The hedge must fit the remaining gross headroom.
+    _eng, v, h = make(risk={"max_gross_exposure_usdt": 70})
+    hold(v, "AAAUSDT", 40)  # gross 40 → 30 USDT of headroom
+    h.evaluate(v, T0)
+    [o] = hedges(v)
+    assert (o.symbol, o.qty) == ("ETHUSDT", Decimal("3"))  # 30 USDT at mid 10, not the 40 the exposure asks for
+
+
+def test_no_hedge_when_gross_headroom_below_min_notional():
+    _eng, v, h = make(risk={"max_gross_exposure_usdt": 55})
+    hold(v, "AAAUSDT", 40)  # 15 USDT headroom < ETH min notional 20
+    h.evaluate(v, T0)
+    assert hedges(v) == []
+    assert v.risk.rejects == {}  # nothing was even sent to the risk check

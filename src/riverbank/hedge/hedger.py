@@ -33,6 +33,7 @@ class Hedger:
         self.beta = beta
         self._last_eval = 0
         self._coarse: set[str] = set()  # venues where no instrument fits (logged once)
+        self._rejected: dict[str, str] = {}  # venue -> last risk reject reason (logged once per change)
 
     def on_timer(self, now: int) -> None:
         if now - self._last_eval < self.h.eval_interval_s * 1000:
@@ -55,8 +56,9 @@ class Hedger:
             side = Side.SELL if e > 0 else Side.BUY
             notional = abs(e)
             pos = float(v.positions.qty(inst))
-            if (pos >= 0) == (side is Side.BUY) or pos == 0:  # the hedge grows this position
-                notional = min(notional, self.cfg.risk.max_position_usdt - abs(pos) * mid)
+            if (pos >= 0) == (side is Side.BUY) or pos == 0:  # the hedge grows this position and gross
+                notional = min(notional, self.cfg.risk.max_position_usdt - abs(pos) * mid,
+                               self.cfg.risk.max_gross_exposure_usdt - v.risk.gross_worst_case())
             qty = floor_to_step(Decimal(repr(max(notional, 0.0) / mid)), spec.step)
             if qty >= spec.min_qty and float(qty) * mid >= float(spec.min_notional):
                 price = Decimal(repr(f.bid if side is Side.BUY else f.ask))
@@ -90,10 +92,19 @@ class Hedger:
             return  # one hedge order at a time: wait for cancels to confirm before placing
         inst, side, price, qty = target
         mark = self.engine.mark(inst)
+        before = dict(v.risk.rejects)
         if self.h.allow_taker and abs(e) > self.h.hedge_urgent_usdt:
             order = v.orders.place(inst, side, Decimal(0), qty, tif="IOC", order_type="MARKET", reason="hedge",
                                    now=now, mark=mark)
         else:
             order = v.orders.place(inst, side, price, qty, tif="GTX", reason="hedge", now=now, mark=mark)
-        log.info("hedge", venue=v.name, symbol=inst, side=side.value, qty=str(qty), price=str(price),
-                 exposure=round(e, 2), placed=order is not None)
+        if order is not None:
+            self._rejected.pop(v.name, None)
+            log.info("hedge", venue=v.name, symbol=inst, side=side.value, qty=str(qty), price=str(price),
+                     exposure=round(e, 2))
+            return
+        reason = ",".join(sorted(k for k, n in v.risk.rejects.items() if n != before.get(k, 0))) or "rejected"
+        if self._rejected.get(v.name) != reason:
+            self._rejected[v.name] = reason
+            log.warning("hedge_rejected", venue=v.name, symbol=inst, side=side.value, qty=str(qty),
+                        exposure=round(e, 2), reason=reason)
