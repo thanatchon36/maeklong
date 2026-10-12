@@ -17,7 +17,7 @@ session, so no signed call was made at all).
 | M3 fair value, quoting, paper fills, analytics, shadow | done | done | M3 |
 | M4 order manager, rate limiter, reconciler, dead-man, risk → demo | done | done | M4 |
 | M5 live small (gated) + shadow-vs-live gap report | done (live blocked, B1) | done | M5 |
-| M6 hedger + beta | pending | | |
+| M6 hedger + beta | done | done | M6 |
 | M7 auto promotion/demotion, multi-level quoting | pending | | |
 
 ## M0 — done
@@ -124,6 +124,21 @@ session, so no signed call was made at all).
   "unidentified flaky test"; the twin's extra engine work made it fail ~1 in 3. The test now waits for it.
 - Acceptance (7 days live within limits + gap report) needs the live run: not done.
 
+## M6 — done (code + replay acceptance; live part pending with M5)
+
+- `hedge/beta.py` (`BetaTable`: klines → 1-min log returns → shrunk OLS beta vs each hedge instrument; refresh
+  loop), `hedge/hedger.py` (`Hedger`, decisions in OPEN_QUESTIONS B23). `main.py` feeds the betas to the risk
+  engine (`Engine(beta=...)`) and registers the hedger as a timer hook when `hedge.enabled`.
+- Tests: `tests/unit/test_beta.py` (returns/gaps, OLS + shrink, prior on little data, klines refresh with
+  paging and completed candles only), `tests/unit/test_hedger.py` (threshold, BTC → ETH fallback with ETH
+  beta, nothing fits, hedge position counted, max-position cap, pull when not OK, keep/cancel resting hedge,
+  taker only if allowed, eval interval).
+- Acceptance in replay (`tests/replay/test_replay_hedge.py`, trending synthetic market, net-beta limit 35):
+  net beta stays within the limit; hedge fills are all maker; net-beta pre-trade rejects drop from 17,174 to
+  3,368 (the risk engine already caps net beta pre-trade, so the hedger's effect is room to keep quoting).
+- Smoke (shadow, public API only, 75 s): betas from 4,318 one-minute returns, e.g. DOGE 1.31 / XRP 1.26 vs BTC.
+- Live part of the acceptance ("in replay and live") needs the live run: not done.
+
 ## Ops: Docker, monitoring, runbook (2026-10-12, no keys needed)
 
 - `docker/{Dockerfile, Dockerfile.dockerignore, docker-compose.yml, env.example}`: services `shadow`
@@ -154,7 +169,7 @@ session, so no signed call was made at all).
   real-venue HALTs, so a crash/restart cannot resume shadow quoting (`tests/unit/test_shadow_halt.py`). Replay
   does not persist.
 - Known remaining gaps (by milestone): ~~ACTIVE promotion and shadow-vs-live gap report (M5)~~ done,
-  hedger (M6; `hedge.enabled` currently has no effect), auto-rotation (M7).
+  ~~hedger (M6)~~ done, auto-rotation (M7).
 
 ## Pending live-time validation
 

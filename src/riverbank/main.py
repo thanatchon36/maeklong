@@ -29,6 +29,8 @@ from riverbank.exchange.environments import ENVIRONMENTS
 from riverbank.exchange.rate_limiter import RateLimiter
 from riverbank.exchange.rest import RestClient
 from riverbank.exchange.specs import ExchangeInfo, fetch_exchange_info
+from riverbank.hedge.beta import BetaTable
+from riverbank.hedge.hedger import Hedger
 from riverbank.marketdata.pipeline import MarketDataPipeline
 from riverbank.marketdata.recorder import Recorder
 from riverbank.ops.alerts import Alerts
@@ -64,6 +66,7 @@ class App:
         self.info: ExchangeInfo | None = None
         self.alerts: Alerts | None = None
         self.screener: Screener | None = None
+        self.betas: BetaTable | None = None
         self.real: Any = None  # demo/live venue wiring (orders/live_venue.py)
 
     # ---- kill switch ----
@@ -108,10 +111,13 @@ class App:
                                            recorder=self.recorder)
         o10 = self.info.rate_limit("ORDERS", 10)
         ids = ClientIdAllocator(self.repo.reserve_seq_block)
+        self.betas = BetaTable(hedge[0], shrink=cfg.hedge.beta_shrink)  # SPEC §5.7: risk uses betas too
         self.engine = Engine(cfg, self.info.specs, self.pipeline.state, RealClock(), ids, repo=self.repo,
                              alerts=self.alerts, metrics=metrics, hedge_symbols=hedge,
                              md_handle=self.pipeline.handle, md_timer=self.pipeline.on_timer,
-                             order_limit_10s=o10.limit if o10 else 300)
+                             order_limit_10s=o10.limit if o10 else 300, beta=self.betas.get)
+        if cfg.hedge.enabled:
+            self.engine.timer_hooks.append(Hedger(cfg, self.engine, self.betas.get).on_timer)
         await self._setup_venues(universe)
         self.alerts.send("INFO", "process_start", f"mode={self.mode.value} symbols={len(universe)}")
         log.info("started", mode=self.mode.value, universe=universe, hedge=hedge)
@@ -231,6 +237,9 @@ class App:
                  self.alerts.poll_commands({"/kill": lambda: (self.kill("telegram /kill"), "HALTED")[1],
                                             "/status": lambda: json.dumps(self.engine.status() if self.engine
                                                                           else {})})]
+        if self.betas is not None:
+            coros.append(self.betas.run(self.rest, self.engine.all_symbols, list(self.cfg.hedge.instruments),
+                                        self.cfg.hedge.beta_window_days, self.cfg.hedge.beta_refresh_s, self.limiter))
         if self.real is not None:
             coros += self.real.coroutines()
         self.tasks += [asyncio.create_task(self._guard(c)) for c in coros]
