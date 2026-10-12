@@ -1,0 +1,13 @@
+# Scrapes the riverbank bots on the compose network. A bot that is not running (e.g. demo without its
+# profile) simply shows as down. The `bot` label drives the Grafana dashboard's selector.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: riverbank
+    static_configs:
+      - targets: ["shadow:9108"]
+        labels: {bot: shadow}
+      - targets: ["demo:9109"]
+        labels: {bot: demo}

@@ -105,6 +105,27 @@ session, so no signed call was made at all).
   rate limiter windows/headers/halt; user-stream payload parsing; trading-rules monitor.
 - Not run: signed calls against demo (no demo API keys in this session) — see pending table.
 
+## Ops: Docker, monitoring, runbook (2026-10-12, no keys needed)
+
+- `docker/{Dockerfile, Dockerfile.dockerignore, docker-compose.yml, env.example}`: services `shadow`
+  (default), `demo` (profile `demo`), `m1` (profile `m1`), `prometheus`, `grafana`. There is no live service.
+  The repo root is bind-mounted as the working dir, so `KILL`, `state/` and `reports/` are shared with host tools.
+  `init: true` forwards SIGTERM/SIGUSR1. Prometheus and Grafana are bound to 127.0.0.1 only.
+- `docker/prometheus/prometheus.yml`, `docker/grafana/{provisioning,dashboards}`: provisioned datasource and a
+  `riverbank` dashboard (risk state, up, recon, equity, inventory, open orders, fills/min, edge, markout, quote
+  uptime, book OK, rate-limit usage, WS latency, errors) with a `bot` selector.
+- `docs/RUNBOOK.md` (Thai), `docs/ACCEPTANCE_PLAN.md`.
+- Smoke test (Docker Desktop, macOS, public data only): image builds; shadow healthy; Prometheus scrapes it;
+  Grafana loads the datasource and dashboard; `docker compose kill -s SIGUSR1 shadow` → HALTED in 68 ms; restart
+  refused while HALT is persisted (restart loop with exit 2, as designed).
+- Found: reading `state/riverbank.sqlite` from the macOS host while the container had it open **corrupted the
+  DB** (SQLite locks do not cross the Docker Desktop VM). The restarted bot then hung forever in
+  `SqliteRepository.__init__` (writer thread died on open, `_ready` never set): fail-closed but silent.
+  RUNBOOK §3.2 forbids host-side DB access on macOS. Fixed: the writer thread hands the open error back and
+  the constructor raises it, so the bot exits non-zero instead of hanging (`tests/unit/test_sqlite_repository.py`).
+- Also: `config/demo.yaml` → `ops.kill_file: KILL.demo`; `tools/shadow_acceptance.py` 7-day check now passes
+  for a full `--start D0 --end D6` window (1 h edge tolerance; test added).
+
 ## Pending live-time validation
 
 | Acceptance | How to run | Report |

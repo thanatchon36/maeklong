@@ -1,0 +1,6 @@
+# Build context is the repo root; the image needs only these. Keeps data/, state/, .venv, secrets out.
+*
+!pyproject.toml
+!uv.lock
+!src/
+**/__pycache__

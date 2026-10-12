@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import subprocess
 import sys
@@ -28,3 +29,15 @@ def test_demo_acceptance_report(tmp_path):
     v = json.loads((out / "summary.json").read_text())["verdict"]
     assert v == {"duration_ge_72h": True, "zero_unresolved_recon_mismatch": True,
                  "fault_injection_tests_pass": None, "kill_switch_lt_1s": True}
+
+
+def test_shadow_acceptance_seven_day_window_can_pass():
+    spec = importlib.util.spec_from_file_location("shadow_acceptance", ROOT / "tools" / "shadow_acceptance.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    day = 86_400_000
+    # --start D0 --end D6: first fill 30 s after D0 opens, last fill 30 s before D6 closes
+    assert mod.covers_days(T0 + 30_000, T0 + 7 * day - 30_000, 7)
+    # the run stopped half a day early
+    assert not mod.covers_days(T0 + 30_000, T0 + 6 * day + day // 2, 7)

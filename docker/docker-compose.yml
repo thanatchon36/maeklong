@@ -1,0 +1,91 @@
+# riverbank: bot (shadow / demo / M1 validation) + Prometheus + Grafana. See docs/RUNBOOK.md.
+#
+#   cp docker/env.example docker/.env      # then edit it
+#   docker compose -f docker/docker-compose.yml up -d --build                  # shadow + monitoring
+#   docker compose -f docker/docker-compose.yml --profile demo up -d demo      # demo (needs demo keys)
+#   docker compose -f docker/docker-compose.yml --profile m1 up -d m1          # M1 24 h validation
+#
+# There is deliberately no live service. M5 is gated (SPEC §0.1, §11).
+name: riverbank
+
+x-bot: &bot
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  image: riverbank:local
+  init: true                      # tini as PID 1: forwards SIGTERM (clean shutdown) and SIGUSR1 (kill switch)
+  restart: unless-stopped         # a persisted HALT or KILL file makes every restart refuse to trade (OQ A5, B6)
+  stop_grace_period: 90s          # clean shutdown cancels all rb-* orders and disarms the dead-man
+  user: "${RB_UID:-1000}:${RB_GID:-1000}"
+  volumes:
+    - ..:/work                    # the repo root: config/, data/, state/, reports/, logs/, KILL
+  logging:
+    driver: json-file
+    options: {max-size: 100m, max-file: "30"}
+
+services:
+  shadow:
+    <<: *bot
+    command: [python, -m, riverbank.main, --config, config/config.yaml]
+    environment:
+      MODE: shadow                # no Binance keys are ever passed to this service
+      TELEGRAM_BOT_TOKEN: ${SHADOW_TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${SHADOW_TELEGRAM_CHAT_ID:-}
+      METRICS_PORT: "9108"        # healthcheck only; the bot reads ops.metrics_port from its config
+    healthcheck: &metrics-health
+      test: [CMD, python, -c, "import os,urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"METRICS_PORT\"]}/metrics', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+    expose: ["9108"]
+
+  demo:
+    <<: *bot
+    profiles: [demo]
+    command: [python, -m, riverbank.main, --config, config/demo.yaml]
+    env_file:
+      - path: ${DEMO_ENV_FILE:-../secrets/demo.env}   # BINANCE_API_KEY/SECRET (DEMO keys), TELEGRAM_* (bot #2)
+        required: false
+    environment:
+      MODE: demo
+      METRICS_PORT: "9109"
+    healthcheck: *metrics-health
+    expose: ["9109"]
+
+  m1:
+    <<: *bot
+    profiles: [m1]
+    restart: "no"
+    command: [python, tools/validate_book.py, --symbols, "${M1_SYMBOLS:-20}", --hours, "${M1_HOURS:-25}",
+              --out, reports/m1-validation, --data-dir, data/m1-validation, --record-depth]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]   # localhost only: reach it through an SSH tunnel
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in docker/.env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/riverbank.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["127.0.0.1:3000:3000"]    # localhost only: reach it through an SSH tunnel
+    depends_on: [prometheus]
+
+volumes:
+  prometheus-data:
+  grafana-data:

@@ -62,9 +62,12 @@ class SqliteRepository:
         self._q: queue.Queue[Any] = queue.Queue()
         self.errors = 0
         self._ready = threading.Event()
+        self._open_error: sqlite3.Error | None = None
         self._thread = threading.Thread(target=self._writer, name="sqlite-writer", daemon=True)
         self._thread.start()
         self._ready.wait()
+        if self._open_error is not None:
+            raise self._open_error  # e.g. a corrupted file: fail startup loudly instead of hanging
 
     # ---- writer thread ----
 
@@ -74,8 +77,13 @@ class SqliteRepository:
         return conn
 
     def _writer(self) -> None:
-        conn = self._connect()
-        conn.executescript(SCHEMA)
+        try:
+            conn = self._connect()
+            conn.executescript(SCHEMA)
+        except sqlite3.Error as e:
+            self._open_error = e
+            self._ready.set()
+            return
         self._mem_conn = conn  # ":memory:" databases are only visible on this connection
         self._ready.set()
         while True:

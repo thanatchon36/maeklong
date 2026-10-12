@@ -80,3 +80,4 @@ ops:
   state_dir: state/demo
   reports_dir: reports/demo
   shadow_equity_usdt: 300
+  kill_file: KILL.demo  # separate from shadow's ./KILL so a demo kill drill cannot halt a parallel shadow run

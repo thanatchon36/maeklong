@@ -21,6 +21,15 @@ from riverbank.marketdata.recorder import recorded_symbols
 from riverbank.ops.logging import setup_logging
 from riverbank.sim.replay import load_events, run_replay
 
+# Fills start just after the window opens and stop just before it closes, so a full 7-day window
+# (--start D0 --end D6) spans slightly less than 7 x 24 h from first to last fill.
+EDGE_TOLERANCE_MS = 3_600_000
+
+
+def covers_days(first_ms: int, last_ms: int, days: int) -> bool:
+    """True if first -> last fill spans `days` days, allowing EDGE_TOLERANCE_MS at the window edges."""
+    return last_ms - first_ms >= days * 86_400_000 - EDGE_TOLERANCE_MS
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -79,8 +88,7 @@ def main() -> None:
                 lines += ["", "## Deterministic replay", "",
                           f"- {len(ev)} recorded events, symbols {syms}: fills {len(a.fills)}; digests "
                           f"{a.digest()[:16]}… vs {b.digest()[:16]}… → **{'IDENTICAL' if determinism else 'DIFF'}**"]
-    days_cov = (last - first) / 86_400_000 if vf else 0.0
-    verdict = {"duration_ge_7d": days_cov >= 7.0 - 1e-6, "daily_reports": len(daily) >= 7,
+    verdict = {"duration_ge_7d": bool(vf) and covers_days(first, last, 7), "daily_reports": len(daily) >= 7,
                "deterministic_replay": bool(determinism)}
     lines += ["", "## Acceptance", ""] + [f"- {k}: {'PASS' if v else 'NOT MET'}" for k, v in verdict.items()]
     (out / "report.md").write_text("\n".join(lines) + "\n")

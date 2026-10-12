@@ -1,0 +1,177 @@
+{
+  "uid": "riverbank",
+  "title": "riverbank",
+  "tags": ["riverbank"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "bot",
+        "label": "bot",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": {"query": "label_values(up{job=\"riverbank\"}, bot)", "refId": "bot"},
+        "definition": "label_values(up{job=\"riverbank\"}, bot)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {"text": "All", "value": "$__all"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Risk state",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "rb_risk_state{bot=~\"$bot\"}", "legendFormat": "{{bot}} {{venue}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{"type": "value", "options": {
+            "0": {"text": "OK", "color": "green"},
+            "1": {"text": "REDUCE_ONLY", "color": "orange"},
+            "2": {"text": "HALTED", "color": "red"}}}],
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 2}]},
+          "color": {"mode": "thresholds"}
+        },
+        "overrides": []
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Bot up (scrape)",
+      "gridPos": {"h": 5, "w": 4, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "up{job=\"riverbank\", bot=~\"$bot\"}", "legendFormat": "{{bot}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{"type": "value", "options": {
+            "0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}],
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Recon mismatches (24 h)",
+      "gridPos": {"h": 5, "w": 4, "x": 10, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (bot) (increase(rb_recon_mismatch_total{bot=~\"$bot\"}[24h]))", "legendFormat": "{{bot}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}
+        },
+        "overrides": []
+      },
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Equity (USDT)",
+      "gridPos": {"h": 5, "w": 10, "x": 14, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "rb_equity_usdt{bot=~\"$bot\"}", "legendFormat": "{{bot}} {{venue}}"}],
+      "fieldConfig": {"defaults": {"unit": "none", "decimals": 2}, "overrides": []}
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Inventory per symbol (USDT at mark)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "rb_inventory_usdt{bot=~\"$bot\"}", "legendFormat": "{{bot}} {{symbol}}"}],
+      "fieldConfig": {"defaults": {"decimals": 2}, "overrides": []}
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Open orders",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "sum by (bot) (rb_open_orders{bot=~\"$bot\"})", "legendFormat": "{{bot}} total"},
+        {"refId": "B", "expr": "rb_open_orders{bot=~\"$bot\"}", "legendFormat": "{{bot}} {{symbol}}"}
+      ],
+      "fieldConfig": {"defaults": {"decimals": 0}, "overrides": []}
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Fills per minute",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 13},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (bot, symbol) (rate(rb_fills_total{bot=~\"$bot\"}[5m])) * 60", "legendFormat": "{{bot}} {{symbol}}"}],
+      "fieldConfig": {"defaults": {"decimals": 2}, "overrides": []}
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Realized edge, 60 s (bps)",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 13},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "rb_realized_edge_bps{bot=~\"$bot\"}", "legendFormat": "{{bot}} {{symbol}}"}],
+      "fieldConfig": {
+        "defaults": {"decimals": 2, "custom": {"thresholdsStyle": {"mode": "line"}},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0}]}},
+        "overrides": []
+      }
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Markout by horizon (bps)",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 13},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "rb_markout_bps{bot=~\"$bot\"}", "legendFormat": "{{bot}} {{symbol}} {{horizon}}"}],
+      "fieldConfig": {"defaults": {"decimals": 2}, "overrides": []}
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Two-sided quote uptime today",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 21},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "rb_quote_uptime_ratio{bot=~\"$bot\"}", "legendFormat": "{{bot}} {{symbol}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}
+    },
+    {
+      "id": 11, "type": "state-timeline", "title": "Book OK per symbol (1 = OK)",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 21},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "rb_book_ok{bot=~\"$bot\"}", "legendFormat": "{{bot}} {{symbol}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [{"type": "value", "options": {
+            "0": {"text": "STALE/INVALID", "color": "red"}, "1": {"text": "OK", "color": "green"}}}],
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "Rate-limit usage (used / limit)",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 21},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "rb_rate_limit_usage_ratio{bot=~\"$bot\"}", "legendFormat": "{{bot}} {{limit}}"}],
+      "fieldConfig": {
+        "defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"thresholdsStyle": {"mode": "line"}},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.6}]}},
+        "overrides": []
+      }
+    },
+    {
+      "id": 13, "type": "timeseries", "title": "WS latency p50 / p99 (ms)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 29},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "histogram_quantile(0.5, sum by (le, bot, stream) (rate(rb_ws_latency_ms_bucket{bot=~\"$bot\"}[5m])))", "legendFormat": "p50 {{bot}} {{stream}}"},
+        {"refId": "B", "expr": "histogram_quantile(0.99, sum by (le, bot, stream) (rate(rb_ws_latency_ms_bucket{bot=~\"$bot\"}[5m])))", "legendFormat": "p99 {{bot}} {{stream}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []}
+    },
+    {
+      "id": 14, "type": "timeseries", "title": "Errors per minute by kind",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 29},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (bot, kind) (rate(rb_errors_total{bot=~\"$bot\"}[5m])) * 60", "legendFormat": "{{bot}} {{kind}}"}],
+      "fieldConfig": {"defaults": {"decimals": 2}, "overrides": []}
+    }
+  ]
+}

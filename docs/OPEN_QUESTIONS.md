@@ -17,7 +17,7 @@ here. The operator can change any of these via `config/config.yaml`; none is cha
 
 | # | Topic | Decision (conservative) | Where |
 |---|---|---|---|
-| B1 | Milestone gating | SPEC §0.1 says stop after each milestone for approval; the operator explicitly instructed to continue through M0–M7 without waiting. Wall-clock acceptance runs are listed as pending in `docs/PROGRESS.md`. | — |
+| B1 | Milestone gating | SPEC §0.1 applies: stop after each milestone and wait for operator approval. The M0–M4 code was built in one pass before any wall-clock acceptance run; as of 2026-10-12 the operator has confirmed that **M5 does not start** until the M1 (24 h), M3 (7-day shadow) and M4 (72 h demo) acceptance runs pass and are approved. Plan: `docs/ACCEPTANCE_PLAN.md`; status: `docs/PROGRESS.md`. | — |
 | B2 | σ in the quoting formulas | SPEC writes `σ_bps` (reservation) and `σ_bps_per_horizon` (half-spread). Both use `σ_h = σ_1s · sqrt(quoting.sigma_horizon_s)`, default horizon **5 s** (= the toxicity markout horizon). `vol_kill_bps` is compared with the exposed σ (bps/√s, per SPEC §5.3). | `quoting/engine.py` |
 | B3 | Requote | **Cancel → wait for confirmation → place new.** Never two live orders on the same side/level; a PENDING_CANCEL order still counts toward exposure. Modify-order (`PUT /fapi/v1/order`) not used in v1. | `orders/manager.py` |
 | B4 | REDUCE_ONLY quoting | In REDUCE_ONLY only the inventory-reducing side is quoted, with `reduceOnly=true` and qty ≤ |position|; everything else is pulled. In HALTED nothing is quoted (flatten logic only). | `quoting/engine.py`, `risk/engine.py` |
