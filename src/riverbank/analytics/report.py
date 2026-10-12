@@ -177,6 +177,10 @@ def build_daily_report(db: str | Path, date: str, out_root: str | Path, cfg: Con
                                     "symbols": sym_summary, "readiness": readiness,
                                     "risk_events": len(risk_ev), "recon_mismatches": len(recon),
                                     "recon_unresolved": sum(1 for r in recon if not r["resolved"])}
+    from riverbank.analytics.gap import TWIN, gap_lines  # gap.py builds on this module
+
+    for real in ("demo", "live"):
+        lines += gap_lines(conn, real, TWIN, t0, t1, horizon)
     decisions = conn.execute("SELECT ts, symbol, from_state, to_state, reason, n, mean, se FROM universe_decisions "
                              "WHERE ts>=? AND ts<? ORDER BY ts", (t0, t1)).fetchall()
     if decisions:

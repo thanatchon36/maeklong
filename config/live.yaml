@@ -1,0 +1,84 @@
+# Live-mode config (SPEC §3, M5): production, REAL money. Config alone never enables live: MODE=live +
+# LIVE_CONFIRM env, the startup checks and LIVE_ACCEPTANCE_APPROVED (OPEN_QUESTIONS B1) are all required.
+# riverbank configuration (SPEC §6). Validated by pydantic: unknown keys are errors.
+# Secrets are NEVER put here — use env vars: BINANCE_API_KEY, BINANCE_API_SECRET (or
+# BINANCE_PRIVATE_KEY_PATH), TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, MODE, LIVE_CONFIRM.
+mode: live              # refused unless MODE=live and LIVE_CONFIRM are set in the environment
+account:
+  fee_maker_bps: 2.0    # demo/live: overridden by GET /fapi/v1/commissionRate at startup
+  fee_taker_bps: 5.0
+  leverage: 2           # SPEC sample says 3; 2 keeps liquidation ~46-49 % away (docs/OPEN_QUESTIONS.md B19)
+  margin_type: ISOLATED
+
+universe:
+  max_active_symbols: 3
+  max_candidate_symbols: 20
+  min_listing_days: 30
+  edge_ratio_min: 1.5
+  vol_min_musd: 5
+  vol_max_musd: 300
+  toxicity_max: 400
+  min_fills_for_promotion: 300
+  demotion_window_fills: 500
+  screen_interval_s: 300
+  screen_lookback_days: 7
+  hedge_only: [BTCUSDT, ETHUSDT]
+  allowed_underlying_types: [COIN]
+  blacklist_path: config/blacklist.yaml
+  static_symbols: []      # e.g. demo: [DOGEUSDT, XRPUSDT]
+  live_symbols: []        # operator allow-list (B11); only these can go ACTIVE (empty = quote nothing)
+  auto_promote: false     # M7: true = promote automatically when shadow evidence passes
+  promotion_horizon_s: 60
+  demotion_cooldown_h: 24
+  shadow_db: state/riverbank.sqlite   # the shadow service DB: promotion evidence (read-only)
+
+quoting:
+  order_size_usdt: 10
+  size_buffer: 2.0
+  max_inventory_units: 5
+  min_half_spread_bps: 3.0
+  base_half_spread_bps: 2.0
+  vol_mult: 1.0
+  skew_k: 0.5
+  requote_ticks: 1
+  vol_kill_bps: 50
+  cooldown_s: 60
+  toxic_markout_bps: -3.0
+  funding_guard_s: 60
+  funding_guard_action: pull    # conservative choice (see docs/OPEN_QUESTIONS.md)
+  sigma_horizon_s: 5
+  levels: 1
+
+risk:
+  max_position_usdt: 50
+  max_gross_exposure_usdt: 150
+  max_net_beta_exposure_usdt: 75
+  max_open_orders: 20
+  max_order_rate_frac: 0.5
+  daily_loss_limit_pct: 10
+  max_drawdown_pct: 15
+  max_leverage: 3
+  min_liq_distance_pct: 30
+  emergency_flatten: false
+
+hedge:
+  enabled: true
+  instruments: [BTCUSDT, ETHUSDT]
+  hedge_threshold_usdt: 25
+  hedge_urgent_usdt: 60
+  allow_taker: false            # conservative choice (see docs/OPEN_QUESTIONS.md)
+  beta_window_days: 3
+  beta_shrink: 0.3
+
+ops:
+  stale_ms: 3000
+  reconcile_s: 30
+  deadman_heartbeat_s: 10
+  deadman_countdown_s: 30
+  sim_latency_ms: 150
+  metrics_port: 9110
+  log_level: INFO
+  data_dir: data/live
+  state_dir: state/live
+  reports_dir: reports/live
+  shadow_equity_usdt: 300

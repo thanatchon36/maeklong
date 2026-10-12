@@ -175,11 +175,27 @@ async def test_quotes_fill_and_clean_shutdown(h):
     assert SYM not in h.fake.countdowns  # dead-man disarmed after a clean shutdown
 
 
+async def test_shadow_twin_quotes_the_same_symbols_without_touching_the_exchange(h):
+    # SPEC §5.9 shadow-vs-live gap: a paper venue quotes the real venue's symbols in the same process.
+    await h.start()
+    twin = h.engine.venues["shadow"]
+    assert twin.kind == "paper" and twin.fill_mode == "shadow"
+    assert twin.symbols == h.venue.symbols == {SYM}
+    await h.wait(lambda: twin.orders.has_two_sided(SYM), what="two-sided paper quotes on the twin")
+    await h.wait(lambda: len(h.fake.open_orders(SYM)) == 2, what="real quotes")
+    assert len(h.fake.open_orders()) == 2  # the twin's orders never reach the exchange
+    twin.risk.halt("twin test halt", now_ms())
+    assert h.venue.risk.state is RiskState.OK  # a twin HALT does not stop the real venue
+    assert halt_record(h.repo) is None         # ... and is not persisted (it would block restarts)
+    await h.stop()
+
+
 async def test_503_unknown_executed_is_resolved_not_resent(h):
     h.fake.inject("POST /fapi/v1/order", 503, UNKNOWN_503, still_execute=True)
     await h.start()
     await h.wait(lambda: len(h.fake.open_orders(SYM)) == 2, what="quotes")
-    assert h.rt.gateway.stats["unknown"] == 1
+    # the fake books the order before it answers 503, so the client may see the 503 slightly later
+    await h.wait(lambda: h.rt.gateway.stats["unknown"] == 1, what="503 unknown handled")
     posts = [r for r in h.fake.requests if r == "POST /fapi/v1/order"]
     assert len(posts) == 2  # the UNKNOWN order was NOT resent
     statuses = {o.status for o in h.venue.orders.orders.values()}

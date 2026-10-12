@@ -16,7 +16,7 @@ session, so no signed call was made at all).
 | M2 universe screener | done | done | M2 |
 | M3 fair value, quoting, paper fills, analytics, shadow | done | done | M3 |
 | M4 order manager, rate limiter, reconciler, dead-man, risk → demo | done | done | M4 |
-| M5 live small (gated) + shadow-vs-live gap report | pending | | |
+| M5 live small (gated) + shadow-vs-live gap report | done (live blocked, B1) | done | M5 |
 | M6 hedger + beta | pending | | |
 | M7 auto promotion/demotion, multi-level quoting | pending | | |
 
@@ -105,6 +105,25 @@ session, so no signed call was made at all).
   rate limiter windows/headers/halt; user-stream payload parsing; trading-rules monitor.
 - Not run: signed calls against demo (no demo API keys in this session) — see pending table.
 
+## M5 — code done; live still blocked (OPEN_QUESTIONS B1)
+
+- Scope agreed with the operator (2026-10-12): write and unit-test M5–M7; never run live. Live remains refused by
+  `LIVE_ACCEPTANCE_APPROVED = False` in `orders/live_venue.py` until the M1/M3/M4 acceptance runs pass and the
+  operator approves; flipping it is the only change needed, the `MODE=live` + `LIVE_CONFIRM` gate stays.
+- `universe/rotation.py`: B10/B11 promotion (`select_active`), shadow evidence from the shadow DB opened read-only
+  (`shadow_evidence`), demotion cooldown + fresh-evidence rule, decisions written to `universe_decisions`
+  (`promoted_symbols`, B21). `select_real_symbols` uses it in live; demo keeps its configured list.
+- Shadow twin: demo/live add a paper venue `shadow` on the real venue's symbols (B22); `analytics/gap.py`
+  (shadow-vs-live gap: fill rate per quoted hour, markout 5 s, realized edge, gap ± combined SE) appended to
+  the daily report and available as `python -m riverbank.analytics.gap --db ... --start ... --end ...`.
+- `config/live.yaml` (own data/state/reports dirs, metrics 9110, `universe.shadow_db`, empty allow-list).
+- Tests: `tests/unit/test_rotation.py`, `tests/unit/test_gap_report.py`, twin test in
+  `tests/integration/test_demo_fault_injection.py`.
+- Found: `test_503_unknown_executed_is_resolved_not_resent` raced (the fake exchange books the order before it
+  answers 503, so the test could see two open orders before the client handled the 503). Probably the
+  "unidentified flaky test"; the twin's extra engine work made it fail ~1 in 3. The test now waits for it.
+- Acceptance (7 days live within limits + gap report) needs the live run: not done.
+
 ## Ops: Docker, monitoring, runbook (2026-10-12, no keys needed)
 
 - `docker/{Dockerfile, Dockerfile.dockerignore, docker-compose.yml, env.example}`: services `shadow`
@@ -134,7 +153,7 @@ session, so no signed call was made at all).
 - OPEN_QUESTIONS B6 for shadow: paper-venue HALTs (daily loss, drawdown, exceptions) are now persisted like
   real-venue HALTs, so a crash/restart cannot resume shadow quoting (`tests/unit/test_shadow_halt.py`). Replay
   does not persist.
-- Known remaining gaps (by milestone): ACTIVE/DEMOTED promotion logic and shadow-vs-live gap report (M5),
+- Known remaining gaps (by milestone): ~~ACTIVE promotion and shadow-vs-live gap report (M5)~~ done,
   hedger (M6; `hedge.enabled` currently has no effect), auto-rotation (M7).
 
 ## Pending live-time validation

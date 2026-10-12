@@ -50,6 +50,8 @@ class UniverseCfg(_Strict):
     auto_promote: bool = False
     promotion_horizon_s: int = 60
     demotion_cooldown_h: float = Field(24, ge=0)
+    # Live (M5): shadow evidence for promotion comes from the shadow service's DB, opened read-only.
+    shadow_db: str = "state/riverbank.sqlite"
 
 
 class QuotingCfg(_Strict):

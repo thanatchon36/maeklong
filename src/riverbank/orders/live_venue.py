@@ -32,8 +32,13 @@ from riverbank.orders.deadman import DeadmanSwitch
 from riverbank.orders.gateway import OrderGateway
 from riverbank.orders.reconciler import Reconciler, fetch_snapshot
 from riverbank.risk.killswitch import persist_halt
+from riverbank.universe.rotation import promoted_symbols
 
 log = get_logger("live_venue")
+
+# OPEN_QUESTIONS B1: set to True only after the operator approves the M1/M3/M4 acceptance runs.
+LIVE_ACCEPTANCE_APPROVED = False
+SHADOW_TWIN = "shadow"  # paper venue quoting the real venue's symbols (shadow-vs-live gap report)
 
 
 def _now_ms() -> int:
@@ -258,6 +263,10 @@ async def setup_real_venue(app: Any, universe: list[str]) -> RealVenueRuntime:
             v.liq[sym] = float(liq)
             log.warning("startup_position", symbol=sym, qty=str(qty), entry=str(entry))
     app.engine.set_symbols(venue_name, checks["symbols"])
+    # Shadow twin (SPEC §5.9 gap report): paper fills on the same symbols and market data, same DB.
+    # Its HALT is not persisted: a simulated venue must never block a real restart.
+    app.engine.add_paper_venue(SHADOW_TWIN, "shadow")
+    app.engine.set_symbols(SHADOW_TWIN, checks["symbols"])
     stream = UserDataStream(venue_name, app.env, rest, app.queue.put_nowait, limiter=app.limiter)
     reconciler = Reconciler(venue_name, rest, app.limiter, app.queue.put_nowait, cfg.ops.reconcile_s)
     v.recon_request = reconciler.request_now
@@ -282,7 +291,10 @@ async def setup_real_venue(app: Any, universe: list[str]) -> RealVenueRuntime:
 
 
 async def select_real_symbols(app: Any, universe: list[str]) -> list[str]:
-    """Demo: the configured/initial universe. Live (M5) overrides this with promoted symbols."""
+    """Demo: the configured/initial universe. Live: ACTIVE symbols promoted from shadow (universe/rotation.py)."""
     if app.mode is Mode.LIVE:
-        raise StartupError("live symbol selection is not available in this build stage")
+        if not LIVE_ACCEPTANCE_APPROVED:
+            raise StartupError("live is blocked until the M1/M3/M4 acceptance runs pass and the operator approves "
+                               "(OPEN_QUESTIONS B1)")
+        return await asyncio.to_thread(promoted_symbols, app.cfg, universe, app.repo, _now_ms())
     return list(universe)
