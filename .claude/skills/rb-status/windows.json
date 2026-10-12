@@ -1,0 +1,5 @@
+{
+  "riverbank-demo-1":   {"label": "M4 demo",   "start": "2026-10-12T05:34:53", "hours": 72},
+  "riverbank-shadow-1": {"label": "M3 shadow", "start": "2026-10-12T06:41:59", "hours": 168},
+  "riverbank-m1-1":     {"label": "M1",        "start": "2026-10-12T05:53:43", "hours": 25}
+}
