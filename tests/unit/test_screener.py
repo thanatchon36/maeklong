@@ -132,6 +132,7 @@ class FakeRest:
         self.info_json = info_json
         self.calls = 0
         self.fail_first = fail_first
+        self.public_book = book()
 
     async def public(self, method, path, params=None):
         self.calls += 1
@@ -142,7 +143,7 @@ class FakeRest:
         syms = [s["symbol"] for s in self.info_json["symbols"]]
         if path.endswith("24hr"):
             return [dict(ticker(), symbol=s) for s in syms]
-        return [dict(book(), symbol=s) for s in syms]
+        return [dict(self.public_book, symbol=s) for s in syms]
 
 
 async def test_scheduled_screener_survives_errors(tmp_path, monkeypatch):
@@ -169,3 +170,49 @@ async def test_scheduled_screener_survives_errors(tmp_path, monkeypatch):
     assert len(results) == 1  # first cycle failed (network), second produced a universe
     assert sleeps == [cfg.universe.screen_interval_s] * 2
     assert (tmp_path / "screen_latest.json").exists()
+
+
+async def test_one_noisy_book_snapshot_does_not_drop_a_candidate(tmp_path):
+    # Thin books flip between 1 and 2 ticks: a single bookTicker snapshot made shadow candidates churn
+    # every screen. Without recorded history, the spread is the median of recent snapshots.
+    from riverbank.universe import screener as scr
+
+    info_json = json.loads((FIX / "exchange_info_sample.json").read_text())
+    cfg = Config.model_validate({"ops": {"state_dir": str(tmp_path), "data_dir": str(tmp_path)}})
+    rest = FakeRest(info_json)
+    s = scr.Screener(cfg, rest)
+    first = candidates(await s.screen_once(NOW))  # 8 bps spread: >= 1.5 x 4 bps round-trip fee
+    assert first
+    await s.screen_once(NOW + 300_000)
+    rest.public_book = book(bid=0.9998, ask=1.0002)  # one 4 bps snapshot: below 6 bps on its own
+    assert candidates(await s.screen_once(NOW + 600_000)) == first
+
+
+def test_hysteresis_keeps_an_incumbent_near_the_entry_threshold():
+    # Enter at spread >= 1.5 x fee (6 bps) and toxicity <= 400; an incumbent stays down to 0.85 of that
+    # (spread >= 5.1 bps, toxicity <= 470), so a symbol sitting on the line does not flap in and out.
+    cfg = Config()
+    specs = {s: spec(s) for s in ("NEARUSDT", "LOWUSDT", "TOXUSDT")}
+    tick = {"NEARUSDT": ticker(), "LOWUSDT": ticker(), "TOXUSDT": ticker(hi=1.176, lo=0.824)}  # tox 440 at 8 bps
+    books = {"NEARUSDT": book(0.99973, 1.00027), "LOWUSDT": book(0.99978, 1.00022), "TOXUSDT": book()}
+    assert candidates(evaluate(specs, tick, books, cfg, set(), NOW)) == []  # 5.4 bps, 4.4 bps, tox 440
+    rows = evaluate(specs, tick, books, cfg, set(), NOW, incumbents=set(specs))
+    assert sorted(candidates(rows)) == ["NEARUSDT", "TOXUSDT"]
+    assert "spread<1.5x_fee" in next(r for r in rows if r.symbol == "LOWUSDT").reasons
+
+
+async def test_screener_passes_its_last_candidates_as_incumbents(tmp_path):
+    from riverbank.universe import screener as scr
+
+    info_json = json.loads((FIX / "exchange_info_sample.json").read_text())
+    cfg = Config.model_validate({"ops": {"state_dir": str(tmp_path), "data_dir": str(tmp_path)}})
+    rest = FakeRest(info_json)
+    s = scr.Screener(cfg, rest)
+    first = candidates(await s.screen_once(NOW))
+    rest.public_book = book(0.99973, 1.00027)  # 5.4 bps: below entry, above the incumbent floor
+    for i in range(1, 2 * scr.SPREAD_SAMPLES):
+        assert candidates(await s.screen_once(NOW + i * 300_000)) == first
+    rest.public_book = book(0.99978, 1.00022)  # 4.4 bps: below the floor too
+    for i in range(2 * scr.SPREAD_SAMPLES, 4 * scr.SPREAD_SAMPLES):
+        last = candidates(await s.screen_once(NOW + i * 300_000))
+    assert last == []

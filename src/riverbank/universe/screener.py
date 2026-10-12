@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import statistics
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -31,6 +33,8 @@ from riverbank.universe.history import HistoryMetrics
 log = get_logger("screener")
 
 DAY_MS = 86_400_000
+SPREAD_SAMPLES = 12  # snapshot spreads kept per symbol: 1 h at the default 300 s screen interval
+HYSTERESIS = 0.85  # a current candidate stays down to 0.85 x the spread entry bar (and toxicity_max / 0.85)
 
 
 def load_blacklist(path: str | Path) -> set[str]:
@@ -107,10 +111,12 @@ def evaluate(
     blacklist: set[str],
     now_ms: int,
     history: Callable[[str], tuple[dict[str, float], int]] | None = None,
+    incumbents: Iterable[str] = (),
 ) -> list[ScreenRow]:
     u, q = cfg.universe, cfg.quoting
     rt_fee = 2 * cfg.account.fee_maker_bps
     rows: list[ScreenRow] = []
+    incumbent = set(incumbents)
     for sym, spec in specs.items():
         row = ScreenRow(sym)
         row.reasons = hard_exclusions(spec, cfg, blacklist, now_ms)
@@ -150,11 +156,12 @@ def evaluate(
         row.order_qty = str(size.qty)
         row.order_notional = size.notional
         row.inventory_units = size.inventory_units
-        if not row.spread_bps >= u.edge_ratio_min * rt_fee:
+        k = HYSTERESIS if sym in incumbent else 1.0  # last screen's candidates keep their place near the line
+        if not row.spread_bps >= u.edge_ratio_min * rt_fee * k:
             row.reasons.append(f"spread<{u.edge_ratio_min}x_fee")
         if not (u.vol_min_musd <= row.quote_vol_musd <= u.vol_max_musd):
             row.reasons.append("volume_out_of_range")
-        if not row.toxicity_proxy <= u.toxicity_max:
+        if not row.toxicity_proxy <= u.toxicity_max / k:
             row.reasons.append("toxic")
         if not size.ok:
             row.reasons.append(f"size:{size.reason}")
@@ -184,6 +191,7 @@ class Screener:
         self.latest_path = state / "screen_latest.json"
         self.info: ExchangeInfo | None = None
         self.last_rows: list[ScreenRow] = []
+        self._spreads: dict[str, deque[float]] = {}  # recent snapshot spreads (bps), used until history exists
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         if self.limiter is not None:
@@ -199,11 +207,21 @@ class Screener:
         books = {b["symbol"]: b for b in await self._get(ep.BOOK_TICKER)}
         blacklist = load_blacklist(self.cfg.universe.blacklist_path)
         lookback = self.cfg.universe.screen_lookback_days
+        for sym, b in books.items():
+            bid, ask = _f(b.get("bidPrice")), _f(b.get("askPrice"))
+            if bid > 0 and ask > bid:
+                spread_bps = (ask - bid) / ((bid + ask) / 2) * 1e4
+                self._spreads.setdefault(sym, deque(maxlen=SPREAD_SAMPLES)).append(spread_bps)
 
         def hist(sym: str) -> tuple[dict[str, float], int]:
-            return self.history.metrics(sym, now, lookback)
+            m, ndays = self.history.metrics(sym, now, lookback)
+            if "spread_bps" not in m and self._spreads.get(sym):
+                # A thin book flips between 1 and 2 ticks; one snapshot made candidates churn every screen.
+                m = {**m, "spread_bps": statistics.median(self._spreads[sym])}
+            return m, ndays
 
-        rows = await asyncio.to_thread(evaluate, self.info.specs, tickers, books, self.cfg, blacklist, now, hist)
+        rows = await asyncio.to_thread(evaluate, self.info.specs, tickers, books, self.cfg, blacklist, now, hist,
+                                       candidates(self.last_rows))
         self.last_rows = rows
         self._persist(rows, now)
         log.info("screen_done", eligible=sum(r.eligible for r in rows), candidates=candidates(rows))

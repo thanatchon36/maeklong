@@ -122,6 +122,13 @@ session, so no signed call was made at all).
   needed, and logged `placed: false` every 5 s. The hedge is now also capped by the remaining gross headroom
   (`RiskEngine.gross_worst_case`), and a rejected hedge logs `hedge_rejected` with the risk reason once per
   change. Tests in `tests/unit/test_hedger.py`.
+- Screener churn (first shadow run, 2026-10-12): 38 distinct symbols quoted in 45 min, 4–11 candidates changed
+  every screen, so no symbol could collect the 300 fills promotion needs. Cause: without recorded history the
+  spread came from one bookTicker snapshot, and thin books flip between 1 and 2 ticks across the 6 bps bar
+  (two production screens 30 s apart: 11 changes). Now the screener uses the median of the last 12 snapshot
+  spreads until history exists, and last screen's candidates stay down to 0.85 × the spread bar (toxicity up to
+  `toxicity_max` / 0.85). Measured on production: 1–4 changes per screen after a few screens. Shadow restarted on
+  it at 06:41:59 UTC (M3 window restarts). Tests in `tests/unit/test_screener.py`.
 
 ## M5 — code done; live still blocked (OPEN_QUESTIONS B1)
 
