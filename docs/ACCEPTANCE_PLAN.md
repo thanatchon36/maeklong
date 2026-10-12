@@ -215,6 +215,23 @@ uv run python tools/demo_acceptance.py --db state/demo/riverbank.sqlite
   the requote rate is too aggressive for live, whatever the result of everything else;
 - after the final drill: 0 open rb-\* orders, 0 positions on demo.
 
+### 3e. M7 rotation on the demo venue (after 3c, not part of the M4 verdict)
+
+The M4 run keeps its fixed `static_symbols` (OPEN_QUESTIONS B24), so `RealVenueRuntime.rotate_once`
+(`orders/live_venue.py`) has never run against a real exchange: only unit tests and replay cover it. Before
+M7 goes live, exercise it once on demo for 1–2 h. **Needs a small code change first** (not built yet): a
+config flag, default off, that adds `_rotation_loop` to the demo coroutines. Then, with a separate demo config:
+
+- `universe.shadow_db` points at the M3 shadow DB (read-only), so promotion uses real production evidence.
+  On macOS Docker Desktop, a second process reading a live SQLite DB through the bind mount is the setup that
+  corrupted a DB before (RUNBOOK §3.2): run 3e after M3 ends or on a copy of the DB;
+- `universe.live_symbols` lists a few READY symbols that the demo exchange also lists;
+- `screen_interval_s` stays 300.
+
+**Check:** at least one promotion configures the symbol on the exchange (leverage, margin) and starts quoting;
+at least one demotion winds the position down to flat and cancels its orders; `universe_decisions` rows match
+the `universe` alerts; recon mismatches stay 0. Demo PnL is still meaningless.
+
 ---
 
 ## 4. Sign-off checklist (M5 gate)
