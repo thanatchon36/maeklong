@@ -159,3 +159,26 @@ def test_no_hedge_when_gross_headroom_below_min_notional():
     h.evaluate(v, T0)
     assert hedges(v) == []
     assert v.risk.rejects == {}  # nothing was even sent to the risk check
+
+
+def test_reduce_only_unwinds_a_leftover_hedge_leg():
+    # Demo twin 2026-10-12: REDUCE_ONLY flattened the quoted symbols but the ETH hedge leg (48.7 of 50 USDT,
+    # above the 90 % resume bar) could never shrink: the quoter never trades ETH and the hedger only ran in OK.
+    # Stuck in REDUCE_ONLY forever, holding a naked ETH long. The hedger now unwinds, never past flat.
+    _eng, v, h = make()
+    hold(v, "ETHUSDT", 4.8)  # 48 USDT long, nothing left to hedge
+    v.risk.state = RiskState.REDUCE_ONLY
+    h.evaluate(v, T0)
+    [o] = hedges(v)
+    assert (o.symbol, o.side, o.time_in_force, o.reduce_only) == ("ETHUSDT", Side.SELL, "GTX", True)
+    assert Decimal(0) < o.qty <= Decimal("4.8")
+
+
+def test_reduce_only_unwind_never_flips_the_hedge():
+    _eng, v, h = make()
+    hold(v, "AAAUSDT", -60)  # wants a 60 USDT BUY hedge ...
+    hold(v, "ETHUSDT", -2.5)  # ... but only 25 USDT of short hedge exists to close
+    v.risk.state = RiskState.REDUCE_ONLY
+    h.evaluate(v, T0 + 5000)
+    [o] = hedges(v)
+    assert (o.symbol, o.side, o.qty) == ("ETHUSDT", Side.BUY, Decimal("2.5"))

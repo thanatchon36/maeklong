@@ -129,6 +129,13 @@ session, so no signed call was made at all).
   spreads until history exists, and last screen's candidates stay down to 0.85 × the spread bar (toxicity up to
   `toxicity_max` / 0.85). Measured on production: 1–4 changes per screen after a few screens. Shadow restarted on
   it at 06:41:59 UTC (M3 window restarts). Tests in `tests/unit/test_screener.py`.
+- Hedge leg deadlock (demo twin, 2026-10-12 07:38 UTC): a `max_position` soft breach put the twin in
+  REDUCE_ONLY; the quoted symbols flattened, but the ETH hedge leg stayed at 48.7 of 50 USDT, above the 90 %
+  resume bar. Nothing could shrink it (the quoter never trades a hedge instrument; the hedger ran only in OK),
+  so the venue was stuck in REDUCE_ONLY holding a naked ETH long. The hedger now unwinds in REDUCE_ONLY:
+  `reduceOnly` orders that shrink an existing hedge position, capped at flat. Tests in
+  `tests/unit/test_hedger.py`. **Not deployed yet**: demo and shadow keep the old code until M4 ends
+  (2026-10-15 05:35 UTC) so the M4 window is not reset; deploy then (`up -d --build`), before 3e.
 
 ## M5 — code done; live still blocked (OPEN_QUESTIONS B1)
 
