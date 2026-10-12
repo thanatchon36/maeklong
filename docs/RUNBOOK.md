@@ -1,7 +1,8 @@
 # RUNBOOK — riverbank (คู่มือปฏิบัติงานสำหรับผู้ดูแลระบบ)
 
-> เอกสารนี้ใช้กับ M0–M4 (shadow / demo / M1 validation) เท่านั้น
-> **ห้ามรันโหมด `live` จนกว่า M5 จะได้รับอนุมัติ** (SPEC §0.1, §11) และ compose ไม่มี service สำหรับ live โดยเจตนา
+> เอกสารนี้ครอบคลุม shadow / demo / M1 validation (§1–§9) และโหมด live สำหรับ M5–M7 (§10)
+> **ห้ามรันโหมด `live` จนกว่า acceptance ของ M1, M3, M4 จะผ่านและ operator อนุมัติ** (SPEC §0.1, §11, OPEN_QUESTIONS B1)
+> โค้ดบล็อก live ไว้ด้วย `LIVE_ACCEPTANCE_APPROVED = False` และ compose ไม่มี service สำหรับ live โดยเจตนา
 > แผนการทดสอบรับมอบ (acceptance) แบบละเอียดอยู่ที่ `docs/ACCEPTANCE_PLAN.md`
 
 ศัพท์ที่ใช้บ่อย (คงไว้เป็นภาษาอังกฤษเพราะตรงกับ log และโค้ด):
@@ -17,8 +18,10 @@
 | `shadow` | ไม่ (จำลองการ fill) | ไม่ใช้ | `config/config.yaml` | `state/riverbank.sqlite` | `./KILL` | `:9108` |
 | `demo` | ใช่ แต่เป็นเงินปลอม (`demo-fapi.binance.com`) | คีย์ **demo** | `config/demo.yaml` | `state/demo/riverbank.sqlite` | `./KILL.demo` | `:9109` |
 | M1 validation | ไม่ | ไม่ใช้ | — | — | — | — |
+| `live` (§10) | **ใช่ เงินจริง** | คีย์ **production** | `config/live.yaml` | `state/live/riverbank.sqlite` | `./KILL` (ใช้ร่วมกับ shadow) | `:9110` |
 
 - shadow และ demo รันพร้อมกันได้ เพราะใช้ state, kill file, พอร์ต metrics และบอท Telegram แยกกัน
+- live **ต้อง**รันคู่กับ shadow เพราะเลือก symbol จากผลของ shadow (อ่าน `state/riverbank.sqlite` แบบอ่านอย่างเดียว)
 - ข้อมูลตลาดดิบอยู่ที่ `data/` (shadow), `data/demo/` (demo) และ `data/m1-validation/` (M1)
 - รายงานรายวันจะสร้างให้อัตโนมัติหลังเที่ยงคืน UTC ที่ `reports/YYYY-MM-DD/` (shadow) และ `reports/demo/YYYY-MM-DD/` (demo)
 - การแจ้งเตือนทุกรายการถูกเขียนลง `logs/alerts.log` ด้วยเสมอ แม้ Telegram จะใช้งานไม่ได้
@@ -116,11 +119,11 @@ HOURS=25 SYMBOLS=20 tools/run_m1_validation.sh              # M1
 
 เลือกวิธีใดก็ได้ ทุกวิธีให้ผลเหมือนกัน คือยกเลิกคำสั่งทั้งหมด ปิด position ด้วย reduce-only limit แล้วหยุดถาวร
 
-| วิธี | shadow | demo |
-|---|---|---|
-| ไฟล์ | `touch KILL` | `touch KILL.demo` |
-| สัญญาณ | `dc kill -s SIGUSR1 shadow` หรือ `kill -USR1 <pid>` | `dc kill -s SIGUSR1 demo` |
-| Telegram | ส่ง `/kill` ไปที่บอท #1 | ส่ง `/kill` ไปที่บอท #2 |
+| วิธี | shadow | demo | live (§10) |
+|---|---|---|---|
+| ไฟล์ | `touch KILL` | `touch KILL.demo` | `touch KILL` (**หยุดทั้ง shadow และ live**) |
+| สัญญาณ | `dc kill -s SIGUSR1 shadow` หรือ `kill -USR1 <pid>` | `dc kill -s SIGUSR1 demo` | `kill -USR1 <pid ของ live>` |
+| Telegram | ส่ง `/kill` ไปที่บอท #1 | ส่ง `/kill` ไปที่บอท #2 | ส่ง `/kill` ไปที่บอท #3 |
 
 - คำสั่ง Telegram `/status` จะตอบสถานะปัจจุบันกลับมา
 - Telegram รับคำสั่งเฉพาะจาก `TELEGRAM_CHAT_ID` ที่ตั้งไว้เท่านั้น
@@ -232,3 +235,150 @@ uv run python tools/shadow_acceptance.py --start D0 --end D6
 dc --profile demo up -d demo                               # M4: รัน 72 ชม. + fault injection + kill drill แล้วสั่ง:
 uv run python tools/demo_acceptance.py --db state/demo/riverbank.sqlite
 ```
+
+---
+
+## 10. โหมด live (M5–M7) — เงินจริง
+
+> ทุกขั้นในหัวข้อนี้ใช้ได้ **หลังจาก** acceptance ของ M1, M3, M4 ผ่านและ operator อนุมัติแล้วเท่านั้น (OPEN_QUESTIONS B1)
+> ถ้ายังไม่ผ่าน ห้ามข้ามขั้น 10.1
+
+### 10.1 ปลดล็อก live (ทำครั้งเดียว และต้องมีหลักฐาน)
+
+1. ตรวจว่ามีรายงานผ่านครบทั้ง 3 ฉบับ: `reports/m1-validation/report.md`, `reports/m3-acceptance/report.md`, `reports/m4-acceptance/report.md`
+2. แก้ `src/riverbank/orders/live_venue.py` จาก `LIVE_ACCEPTANCE_APPROVED = False` เป็น `True`
+3. commit โดยใส่ลิงก์หรือชื่อไฟล์รายงานทั้ง 3 ฉบับไว้ใน commit message และแก้ OPEN_QUESTIONS B1 ให้บันทึกวันที่อนุมัติ
+4. `uv run pytest -q` ต้องผ่านทั้งหมด (test `test_live_selection_stays_blocked_until_acceptance_is_approved` จะ fail หลังปลดล็อก ให้แก้ test นั้นใน commit เดียวกันให้ตรวจว่า flag เป็น `True` ตามที่อนุมัติ)
+
+แม้ปลดล็อกแล้ว บอทยังต้องผ่าน gate อื่นทุกข้อ: `MODE=live`, `LIVE_CONFIRM`, และ startup checks (§10.4)
+
+### 10.2 เตรียมบัญชีและคีย์ production
+
+- บัญชี Futures ต้องเป็น **Single-Asset** และ **one-way** และต้องไม่มี position หรือคำสั่งที่เปิดเอง
+- ฝากเงินเท่าที่ยอมเสียได้ทั้งหมด เพดานความเสี่ยงใน `config/live.yaml` เป็นตัวเลข USDT คงที่ ไม่ปรับตามยอดเงิน
+- สร้าง API key ใหม่สำหรับบอทนี้โดยเฉพาะ:
+  - เปิดเฉพาะ **Enable Futures** (และ Reading)
+  - **ห้ามเปิด Withdrawals** (บอทจะไม่ยอมเริ่มถ้าเปิด)
+  - **ต้องจำกัด IP** ให้เป็น IP คงที่ของ VPS (บอทจะไม่ยอมเริ่มถ้าไม่จำกัด)
+- เก็บคีย์ในไฟล์นอก repo และใช้บอท Telegram ตัวที่ 3 (แยกจาก shadow และ demo):
+
+```bash
+cat > ~/.riverbank/live.env <<'EOT'
+BINANCE_API_KEY=<production key>
+BINANCE_API_SECRET=<production secret>
+TELEGRAM_BOT_TOKEN=<token ของบอท Telegram ตัวที่ 3>
+TELEGRAM_CHAT_ID=<chat id>
+EOT
+chmod 600 ~/.riverbank/live.env
+```
+
+### 10.3 เลือก symbol ที่จะเทรด (allow-list)
+
+live จะ quote เฉพาะ symbol ที่ผ่าน **ทุกข้อ** (OPEN_QUESTIONS B10, B11, B21):
+
+- อยู่ใน universe ที่ screener คัดไว้ในขณะนั้น
+- ใน shadow มี fill อย่างน้อย `min_fills_for_promotion` (300) และ realized edge ที่ 60 วินาทีผ่าน `mean − 1·SE > 0`
+- อยู่ใน `universe.live_symbols` ใน `config/live.yaml` (เว้นแต่ตั้ง `auto_promote: true` ซึ่ง**ไม่แนะนำ**)
+- ไม่ได้อยู่ในช่วง cooldown หลังถูก demote (24 ชม.) และหลังถูก demote ต้องมีผล shadow ชุดใหม่ที่เกิดหลังวันที่ demote
+- รวมแล้วไม่เกิน `max_active_symbols` (3)
+
+ดูว่า symbol ไหนพร้อม: เปิดหัวข้อ "Promotion readiness" ในรายงานรายวันของ shadow (`reports/YYYY-MM-DD/report.md`)
+แล้วใส่ชื่อที่ต้องการลงใน allow-list เช่น `live_symbols: [DOGEUSDT, XRPUSDT]`
+**ถ้า allow-list ว่าง live จะไม่ quote อะไรเลย**
+
+### 10.4 เริ่ม live
+
+live ยังไม่มี service ใน docker compose ให้รันด้วย `uv` ใน `tmux` บน VPS Linux (เครื่องเดียวกับ shadow)
+**ห้ามรัน live บน macOS Docker Desktop** เพราะ live ต้องอ่าน DB ของ shadow ซึ่งข้าม VM ไม่ได้ (§3.2)
+
+```bash
+tmux new -s live
+cd ~/maeklong
+set -a; source ~/.riverbank/live.env; set +a
+MODE=live LIVE_CONFIRM=I_UNDERSTAND_THE_RISK uv run python -m riverbank.main --config config/live.yaml
+```
+
+ตอนเริ่ม บอทจะตรวจตามลำดับและ**ไม่ยอมเริ่ม** (`REFUSED`) ถ้าข้อใดไม่ผ่าน:
+
+| ตรวจ | ถ้าไม่ผ่าน |
+|---|---|
+| `LIVE_ACCEPTANCE_APPROVED` | ยังไม่ปลดล็อก → ทำ §10.1 |
+| `MODE=live` และ `LIVE_CONFIRM` ถูกต้อง | ตั้ง env ให้ครบ |
+| ไม่มี HALT ค้างใน `state/live/` และไม่มีไฟล์ `KILL` | ทำตาม §5 |
+| พบ `universe.shadow_db` และไม่ใช่ DB ของ live เอง | ต้องมี shadow รันอยู่ และ live ต้องใช้ `config/live.yaml` |
+| เวลาเครื่องเพี้ยนไม่เกินครึ่งหนึ่งของ recvWindow | ตรวจ `timedatectl` / chrony |
+| คีย์ไม่มีสิทธิ์ถอน, จำกัด IP, เปิด Futures | แก้ที่หน้า API Management |
+| Single-Asset, one-way, ค่า maker fee จริงไม่สูงกว่า config | แก้บัญชี หรือแก้ `account.fee_maker_bps` |
+| ตั้ง ISOLATED + leverage 2 ได้ทุก symbol | symbol ที่ตั้งไม่ได้จะถูกตัดออก (ดู log `symbol_setup_failed`) |
+
+เมื่อเริ่มสำเร็จจะเห็น log `live_symbols_selected` (symbol ที่เลือก) และ `real_venue_ready`
+
+**ให้เริ่มด้วย symbol เดียวก่อน** เฝ้าดูชั่วโมงแรกอย่างใกล้ชิด แล้วค่อยเพิ่ม allow-list (ต้องรีสตาร์ต live เพื่อให้ config ใหม่มีผล)
+
+หยุดแบบปกติ: กด `Ctrl-C` ใน tmux (บอทจะยกเลิกคำสั่ง `rb-*` ทั้งหมดและปิด dead-man ก่อนออก)
+**position ที่เปิดอยู่จะไม่ถูกปิดอัตโนมัติ** ถ้าต้องการปิดให้ใช้ kill switch (§4) หรือ `flatten_all.py` ด้านล่าง
+
+### 10.5 สิ่งที่บอททำเองระหว่าง live
+
+- **shadow twin:** มี paper venue ชื่อ `shadow` quote symbol เดียวกับ live ใน process เดียวกัน ใช้ทำ gap report
+  ถ้า twin เข้า HALTED จะไม่กระทบ live และไม่ทำให้รีสตาร์ตไม่ได้ แต่ kill switch จะหยุดทั้งคู่
+- **hedger (M6):** ถ้า net beta exposure เกิน `hedge_threshold_usdt` (25) จะส่งคำสั่ง hedge แบบ post-only
+  ด้วยค่า default จะ hedge ด้วย **ETHUSDT** เพราะ min notional ของ BTCUSDT (100 USDT) เกิน `max_position_usdt` (50)
+  hedger ทำงานเฉพาะตอน risk state เป็น OK ถ้าไม่มี instrument ไหนใช้ได้จะเห็น `hedge_too_coarse` ใน log ซึ่งยังปลอดภัย เพราะ risk engine คุม `max_net_beta_exposure_usdt` อยู่
+- **beta:** คำนวณใหม่ทุก 1 ชม. จาก klines 1 นาทีย้อนหลัง 3 วัน (log `beta`) ถ้าดึงไม่ได้จะใช้ค่าเดิม
+- **หมุน universe (M7):** ทุก 5 นาที
+  - demote symbol ที่ live edge ของ 500 fills ล่าสุดมี `mean + 1·SE < 0` แล้วเข้า cooldown 24 ชม.
+  - symbol ที่หลุดจาก universe ของ screener จะกลับเป็น CANDIDATE
+  - ถ้ามีช่องว่าง จะ promote symbol ใหม่ตามกฎ §10.3 โดยตั้ง ISOLATED + leverage บนตลาดก่อนเริ่ม quote
+  - symbol ที่ถูกเอาออกจะ quote เฉพาะฝั่งที่ลด position จนกว่าจะ flat
+  - ทุกการเปลี่ยนแปลงถูกบันทึกใน `universe_decisions`, log `universe_decision` และส่ง alert INFO
+- **ไม่มีการเพิ่มขนาดอัตโนมัติ** ทุกการเพิ่มขนาดต้องทำตาม §6
+
+### 10.6 งานประจำวันเพิ่มเติมสำหรับ live
+
+1. ทำ §7 ทั้งหมด ยกเว้น Grafana: Prometheus ใน compose scrape เฉพาะ shadow และ demo จึง**ยังไม่เห็น live ใน Grafana**
+   ให้ดูสถานะ live ด้วย Telegram `/status` (บอท #3) หรือ `curl -s localhost:9110/metrics | grep -E "^rb_(risk_state|equity_usdt)"`
+2. เปิด `reports/live/YYYY-MM-DD/report.md` แล้วดู:
+   - หัวข้อ **Shadow-vs-live gap**: ถ้า edge gap ติดลบมาก (เกิน 2·SE) หรือ fill rate ของ live ต่ำกว่า shadow มาก แปลว่า paper fill model มองโลกในแง่ดีเกินไป ควรระวังก่อนเพิ่มขนาด
+   - หัวข้อ **Universe decisions**: การ promote/demote ของเมื่อวาน
+   - PnL decomposition และคอลัมน์ hedge
+3. ดู gap report ช่วงหลายวัน:
+   ```bash
+   uv run python -m riverbank.analytics.gap --db state/live/riverbank.sqlite --start 2026-10-20 --end 2026-10-26
+   ```
+4. ดูประวัติการหมุน universe:
+   ```bash
+   sqlite3 state/live/riverbank.sqlite \
+     "select datetime(ts/1000,'unixepoch'),symbol,from_state,to_state,reason,n,round(mean,2),round(se,2) from universe_decisions order by id desc limit 20"
+   ```
+
+### 10.7 หยุดฉุกเฉินและเครื่องมือ standalone สำหรับ live
+
+ใช้ kill switch ตาม §4 ก่อนเสมอ ถ้าบอทค้างหรือตายไปแล้ว:
+
+```bash
+set -a; source ~/.riverbank/live.env; set +a
+export MODE=live LIVE_CONFIRM=I_UNDERSTAND_THE_RISK
+uv run python tools/cancel_all.py --live                  # dry run: คำสั่ง rb-* ที่ค้างบน production
+uv run python tools/cancel_all.py --live --execute        # ยกเลิกจริง
+uv run python tools/flatten_all.py --live                 # dry run: position
+uv run python tools/flatten_all.py --live --execute       # ปิดด้วย reduce-only limit (--taker เฉพาะฉุกเฉินจริง)
+```
+
+กู้คืนจาก HALTED ทำตาม §5 แต่ใช้ DB ของ live:
+
+```bash
+sqlite3 state/live/riverbank.sqlite \
+  "select datetime(ts/1000,'unixepoch'),level,rule,detail,state_after from risk_events order by ts desc limit 20"
+uv run python tools/clear_halt.py --db state/live/riverbank.sqlite --kill-file KILL   # จะถามยืนยัน
+```
+
+ระวัง: `clear_halt.py` จะลบไฟล์ `KILL` ซึ่ง shadow ใช้ร่วมกัน ถ้า shadow มี HALT ของตัวเองบันทึกไว้ ต้องล้างแยกด้วย `tools/clear_halt.py` (ค่า default)
+
+### 10.8 การทดสอบรับมอบ M5–M7
+
+| Milestone | เกณฑ์ (SPEC §12) | ดูจากที่ไหน |
+|---|---|---|
+| M5 | รัน live 7 วันโดยไม่เกินเพดานความเสี่ยงใดเลย และมี shadow-vs-live gap report | `risk_events` ต้องไม่มี HALT, รายงานรายวัน 7 ฉบับ, `analytics.gap` ช่วง 7 วัน |
+| M6 | net beta exposure อยู่ในเพดานทั้งใน replay และ live | replay: `tests/replay/test_replay_hedge.py`; live: `risk_events` ไม่มี soft breach `net_beta_exposure` ค้างนาน |
+| M7 | universe หมุนอัตโนมัติ และมีบันทึกการตัดสินใจใน log | `universe_decisions` และ log `universe_decision` |
