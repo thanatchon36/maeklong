@@ -613,7 +613,10 @@ class Engine:
                 continue
             local = v.orders.orders.get(cid)
             age_ok = ev.requested_ts - int(o.get("updateTime", o.get("time", 0)) or 0) > grace
-            if (local is None or local.status.is_terminal) and age_ok:
+            # terminal only counts if it was already terminal when the snapshot was taken (a cancel that
+            # confirms between the REST call and its processing is not a mismatch)
+            gone = local is None or (local.status.is_terminal and local.ts_updated < ev.requested_ts)
+            if gone and age_ok:
                 issues.setdefault(str(o["symbol"]), []).append(f"unknown_open_order {cid}")
         for o in v.orders.live_orders():
             if (o.status in (OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED) and o.client_id not in ex_open

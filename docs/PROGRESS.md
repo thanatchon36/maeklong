@@ -113,6 +113,10 @@ session, so no signed call was made at all).
   markout per horizon (last 200 fills), today's two-sided uptime (UTC day), limiter usage (timer hook in
   `main.py`), WS latency = receive time on the exchange clock − event time `E`, and every ERROR/CRITICAL log
   line counted by event name (`ops/logging.add_error_hook`). Tests: `tests/unit/test_metrics_export.py`.
+- Recon race (first demo run, 2026-10-12): two `RECON_MISMATCH unknown_open_order` on XRPUSDT were false
+  positives: the REST snapshot was taken while our order was open and its cancel confirmed before the snapshot
+  was processed. A locally terminal order now counts as "unknown" only if it was terminal before the snapshot
+  was requested (`tests/unit/test_recon_race.py`). Both had self-resolved within 30 s.
 
 ## M5 — code done; live still blocked (OPEN_QUESTIONS B1)
 
