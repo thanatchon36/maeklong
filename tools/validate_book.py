@@ -107,6 +107,8 @@ def build_report(pipe: MarketDataPipeline, started: int, ended: int, recorder: R
                "bad_files": bad_files[:20]}
     t0 = dt.datetime.fromtimestamp(started / 1000, dt.UTC).isoformat(timespec="seconds")
     t1 = dt.datetime.fromtimestamp(ended / 1000, dt.UTC).isoformat(timespec="seconds")
+    pq_label = ("not checked (interim; checked in the final report)" if verdict["parquet_readable"] is None
+                else "PASS" if verdict["parquet_readable"] else "FAIL")
     lines = [
         "# M1 validation report — market data, local books, recorder", "",
         f"- Window: {t0} → {t1} ({hours:.2f} h), {len(rows)} symbols",
@@ -115,12 +117,13 @@ def build_report(pipe: MarketDataPipeline, started: int, ended: int, recorder: R
         f"REST snapshots older than the stream (refetched): {sum(r['stale_snapshots'] for r in rows)}",
         f"- WS reconnects: {reconnects}, planned rolls: {rolls}, parse errors: {pipe.gateway.parse_errors}",
         f"- REST snapshots: {pipe.gateway.snapshots} (errors {pipe.gateway.snapshot_errors})",
-        f"- Parquet files: {pq_files}, unreadable: {pq_bad}; rows written: {recorder.rows_written}",
+        f"- Parquet files: {pq_files if check_parquet else 'not checked'}, "
+        f"unreadable: {pq_bad if check_parquet else '-'}; rows written: {recorder.rows_written}",
         "", "## Acceptance (SPEC §12 M1)", "",
         f"- 24 h duration: {'PASS' if verdict['duration_ok_24h'] else 'NOT MET (run was shorter)'}",
         f"- No undetected gaps: {'PASS' if verdict['no_undetected_gaps'] else 'FAIL'}",
         f"- L1–L5 match ≥ 99.9 %: {'PASS' if verdict['l1_l5_match_ge_99_9'] else 'FAIL'}",
-        f"- Parquet readable: {'PASS' if verdict['parquet_readable'] else 'FAIL'}", "",
+        f"- Parquet readable: {pq_label}", "",
         "## Per symbol", "",
         "| symbol | checks | match % | undetected | detected gaps | resyncs | stale events | synced |",
         "|---|---:|---:|---:|---:|---:|---:|---|",

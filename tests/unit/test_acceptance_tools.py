@@ -41,3 +41,20 @@ def test_shadow_acceptance_seven_day_window_can_pass():
     assert mod.covers_days(T0 + 30_000, T0 + 7 * day - 30_000, 7)
     # the run stopped half a day early
     assert not mod.covers_days(T0 + 30_000, T0 + 6 * day + day // 2, 7)
+
+
+def test_m1_interim_report_does_not_fail_unchecked_parquet(tmp_path):
+    from types import SimpleNamespace as NS
+    spec = importlib.util.spec_from_file_location("validate_book", ROOT / "tools" / "validate_book.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    sync = NS(gaps=0, stale_snapshots=0, syncs=1, synced=True)
+    pipe = NS(status_changes=[], gateway=NS(_conns={}, parse_errors=0, snapshots=1, snapshot_errors=0),
+              state=NS(symbols={"DOGEUSDT": NS(sync=sync, checks=1, check_matches=1, check_mismatches=0,
+                                               mismatch_details=[])}))
+    md, summary = mod.build_report(pipe, T0, T0 + 600_000, NS(rows_written=1, write_errors=0), tmp_path,
+                                   check_parquet=False)
+    assert summary["verdict"]["parquet_readable"] is None
+    assert "Parquet readable: not checked (interim; checked in the final report)" in md
+    assert "Parquet readable: FAIL" not in md
