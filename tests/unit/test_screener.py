@@ -1,3 +1,4 @@
+import datetime as dt
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -216,3 +217,33 @@ async def test_screener_passes_its_last_candidates_as_incumbents(tmp_path):
     for i in range(2 * scr.SPREAD_SAMPLES, 4 * scr.SPREAD_SAMPLES):
         last = candidates(await s.screen_once(NOW + i * 300_000))
     assert last == []
+
+
+async def test_history_read_survives_compaction_between_listing_and_reading(tmp_path, monkeypatch):
+    # Shadow 2026-10-12 20:00:11: the recorder compacted hour 19's parts (rename + delete) after the screener
+    # listed them, so reading a listed part raised FileNotFoundError and the screen failed. Skipping the missing
+    # part would drop an hour, and a completed day is cached for good: re-list and read again instead.
+    from riverbank.universe import history
+
+    rec = Recorder(tmp_path)
+    d0 = NOW - DAY
+    day0 = dt.datetime.fromtimestamp(d0 / 1000, dt.UTC).date().isoformat()
+    for i in range(0, 13 * 3600, 60):
+        ts = d0 + i * 1000
+        rec.on_event(BookTicker("AAAUSDT", i + 1, ts, ts, 0.9998, 1, 1.0002, 1, ts))
+        if i % 3600 == 0:
+            await rec.flush()  # several part files per hour, like the live recorder
+    await rec.flush()
+    stale = {s: history.list_files(tmp_path, s, "AAAUSDT", [day0])
+             for s in ("bookTicker", "aggTrade")}
+    await rec.compact(NOW)  # parts -> HH.parquet, parts deleted
+    calls = []
+
+    def listing(root, stream, symbol=None, dates=None):
+        calls.append(stream)
+        return stale[stream] if calls.count(stream) == 1 else real_list(root, stream, symbol, dates)
+
+    real_list = history.list_files
+    monkeypatch.setattr(history, "list_files", listing)
+    m = history.day_metrics(tmp_path, "AAAUSDT", day0)
+    assert m is not None and abs(m["spread_bps"] - 4.0) < 0.1 and m["coverage_h"] > 12.9

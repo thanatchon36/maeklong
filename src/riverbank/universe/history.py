@@ -25,10 +25,16 @@ DayMetrics = dict[str, float]
 
 
 def _read(root: Path, stream: str, symbol: str, date: str, cols: list[str]) -> dict[str, np.ndarray] | None:
-    files = list_files(root, stream, symbol, [date])
-    if not files:
-        return None
-    parts = [pq.read_table(f, columns=cols) for f in files]
+    for attempt in range(3):
+        files = list_files(root, stream, symbol, [date])
+        if not files:
+            return None
+        try:
+            parts = [pq.read_table(f, columns=cols) for f in files]
+            break
+        except FileNotFoundError:  # the recorder compacted an hour's parts after we listed them: list again
+            if attempt == 2:
+                raise
     out = {c: np.concatenate([p.column(c).to_numpy() for p in parts]) for c in cols}
     order = np.argsort(out["recv_ts"], kind="stable")
     return {c: v[order] for c, v in out.items()}

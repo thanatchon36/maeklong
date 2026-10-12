@@ -136,6 +136,12 @@ session, so no signed call was made at all).
   `reduceOnly` orders that shrink an existing hedge position, capped at flat. Tests in
   `tests/unit/test_hedger.py`. **Not deployed yet**: demo and shadow keep the old code until M4 ends
   (2026-10-15 05:35 UTC) so the M4 window is not reset; deploy then (`up -d --build`), before 3e.
+- Screener vs recorder race (shadow, 2026-10-12 20:00:11 UTC): at the top of the hour the recorder compacts the
+  previous hour's parts (rename, then delete); the screener's history reader had listed those parts just
+  before, so one read raised `FileNotFoundError` and that screen failed (the last universe was kept). Skipping
+  the vanished file would drop an hour from a day that is then cached for good, so the reader re-lists and
+  reads again (`universe/history.py::_read`, test in `tests/unit/test_screener.py`). **Not deployed yet**:
+  ships with the hedger fix above.
 
 ## M5 — code done; live still blocked (OPEN_QUESTIONS B1)
 
