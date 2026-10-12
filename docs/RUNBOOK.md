@@ -18,7 +18,7 @@
 | `shadow` | ไม่ (จำลองการ fill) | ไม่ใช้ | `config/config.yaml` | `state/riverbank.sqlite` | `./KILL` | `:9108` |
 | `demo` | ใช่ แต่เป็นเงินปลอม (`demo-fapi.binance.com`) | คีย์ **demo** | `config/demo.yaml` | `state/demo/riverbank.sqlite` | `./KILL.demo` | `:9109` |
 | M1 validation | ไม่ | ไม่ใช้ | — | — | — | — |
-| `live` (§10) | **ใช่ เงินจริง** | คีย์ **production** | `config/live.yaml` | `state/live/riverbank.sqlite` | `./KILL` (ใช้ร่วมกับ shadow) | `:9110` |
+| `live` (§10) | **ใช่ เงินจริง** | คีย์ **production** | `config/live.yaml` | `state/live/riverbank.sqlite` | `./KILL` (ใช้ร่วมกับ shadow) | `:9110` (บน host ต้องตั้ง firewall §10.4) |
 
 - shadow และ demo รันพร้อมกันได้ เพราะใช้ state, kill file, พอร์ต metrics และบอท Telegram แยกกัน
 - live **ต้อง**รันคู่กับ shadow เพราะเลือก symbol จากผลของ shadow (อ่าน `state/riverbank.sqlite` แบบอ่านอย่างเดียว)
@@ -205,7 +205,8 @@ ssh -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 <user>@<vps>
 # แล้วเปิด http://localhost:3000  (user: admin, รหัสผ่านตาม GRAFANA_ADMIN_PASSWORD)
 ```
 
-แดชบอร์ด `riverbank` ถูกตั้งเป็นหน้าแรก ใช้ตัวเลือก `bot` ด้านบนสลับระหว่าง shadow และ demo ได้
+แดชบอร์ด `riverbank` ถูกตั้งเป็นหน้าแรก ใช้ตัวเลือก `bot` ด้านบนสลับระหว่าง shadow, demo และ live ได้
+(live รันบน host ด้วย `uv` Prometheus จึงดึงค่าผ่าน `host.docker.internal:9110` ถ้า live ไม่ได้รันอยู่จะแสดงเป็น down ซึ่งปกติ)
 
 ---
 
@@ -313,6 +314,20 @@ MODE=live LIVE_CONFIRM=I_UNDERSTAND_THE_RISK uv run python -m riverbank.main --c
 
 เมื่อเริ่มสำเร็จจะเห็น log `live_symbols_selected` (symbol ที่เลือก) และ `real_venue_ready`
 
+**Firewall สำหรับพอร์ต metrics (ทำครั้งแรกครั้งเดียว ก่อนเริ่ม live):**
+live เปิด metrics ที่ `0.0.0.0:9110` บน host ซึ่งมีข้อมูล position และ equity ห้ามเปิดให้ internet เข้าถึง
+แต่ต้องให้ Prometheus ในคอนเทนเนอร์เข้าถึงได้:
+
+```bash
+sudo ufw default deny incoming
+sudo ufw allow OpenSSH                                          # ต้องมีก่อน enable ไม่อย่างนั้น SSH จะหลุด
+sudo ufw allow from 172.16.0.0/12 to any port 9110 proto tcp    # เฉพาะเครือข่ายของ Docker
+sudo ufw enable && sudo ufw status
+curl -s --max-time 3 http://<IP สาธารณะของ VPS>:9110/metrics || echo "ปิดจากภายนอกแล้ว (ถูกต้อง)"   # รันจากเครื่องอื่น
+```
+
+ตรวจว่า Prometheus เห็น live: เปิด `http://localhost:9090/targets` ผ่าน SSH tunnel (§7) ต้องเห็น `bot="live"` เป็น UP
+
 **ให้เริ่มด้วย symbol เดียวก่อน** เฝ้าดูชั่วโมงแรกอย่างใกล้ชิด แล้วค่อยเพิ่ม allow-list (ต้องรีสตาร์ต live เพื่อให้ config ใหม่มีผล)
 
 หยุดแบบปกติ: กด `Ctrl-C` ใน tmux (บอทจะยกเลิกคำสั่ง `rb-*` ทั้งหมดและปิด dead-man ก่อนออก)
@@ -336,8 +351,9 @@ MODE=live LIVE_CONFIRM=I_UNDERSTAND_THE_RISK uv run python -m riverbank.main --c
 
 ### 10.6 งานประจำวันเพิ่มเติมสำหรับ live
 
-1. ทำ §7 ทั้งหมด ยกเว้น Grafana: Prometheus ใน compose scrape เฉพาะ shadow และ demo จึง**ยังไม่เห็น live ใน Grafana**
-   ให้ดูสถานะ live ด้วย Telegram `/status` (บอท #3) หรือ `curl -s localhost:9110/metrics | grep -E "^rb_(risk_state|equity_usdt)"`
+1. ทำ §7 ทั้งหมด (ใน Grafana เลือก `bot` เป็น `live`)
+   ถ้า Grafana แสดง live เป็น down ทั้งที่ live รันอยู่ ให้ตรวจ firewall ตาม §10.4
+   และดูสถานะตรง ๆ ได้ด้วย Telegram `/status` (บอท #3) หรือ `curl -s localhost:9110/metrics | grep -E "^rb_(risk_state|equity_usdt)"`
 2. เปิด `reports/live/YYYY-MM-DD/report.md` แล้วดู:
    - หัวข้อ **Shadow-vs-live gap**: ถ้า edge gap ติดลบมาก (เกิน 2·SE) หรือ fill rate ของ live ต่ำกว่า shadow มาก แปลว่า paper fill model มองโลกในแง่ดีเกินไป ควรระวังก่อนเพิ่มขนาด
    - หัวข้อ **Universe decisions**: การ promote/demote ของเมื่อวาน

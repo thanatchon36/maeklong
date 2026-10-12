@@ -11,3 +11,6 @@ scrape_configs:
         labels: {bot: shadow}
       - targets: ["demo:9109"]
         labels: {bot: demo}
+      # live runs on the host with uv (no compose service, RUNBOOK §10): reached via the host gateway
+      - targets: ["host.docker.internal:9110"]
+        labels: {bot: live}
