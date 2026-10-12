@@ -34,7 +34,7 @@ from riverbank.hedge.hedger import Hedger
 from riverbank.marketdata.pipeline import MarketDataPipeline
 from riverbank.marketdata.recorder import Recorder
 from riverbank.ops.alerts import Alerts
-from riverbank.ops.logging import get_logger, setup_logging
+from riverbank.ops.logging import add_error_hook, get_logger, setup_logging
 from riverbank.ops.metrics import Metrics
 from riverbank.orders.client_ids import ClientIdAllocator
 from riverbank.risk.killswitch import install_sigusr1, persist_halt, startup_blockers, watch_kill_file
@@ -99,6 +99,7 @@ class App:
         self.rest.header_hook = self.limiter.on_headers
         self._save_exchange_info()
         metrics = Metrics()
+        add_error_hook(metrics.count_error)
         try:
             metrics.serve(ops.metrics_port, ops.metrics_addr)
         except OSError as e:  # keep trading without metrics, but say so (e.g. wrong bridge address)
@@ -121,6 +122,8 @@ class App:
                              order_limit_10s=o10.limit if o10 else 300, beta=self.betas.get)
         if cfg.hedge.enabled:
             self.engine.timer_hooks.append(Hedger(cfg, self.engine, self.betas.get).on_timer)
+        limiter = self.limiter
+        self.engine.timer_hooks.append(lambda now: metrics.set_rate_limits(limiter.usage()))
         await self._setup_venues(universe)
         self.alerts.send("INFO", "process_start", f"mode={self.mode.value} symbols={len(universe)}")
         log.info("started", mode=self.mode.value, universe=universe, hedge=hedge)

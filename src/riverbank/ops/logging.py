@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from typing import Any, TextIO
 
 import structlog
@@ -16,6 +16,24 @@ _SECRET_KEYS = {"api_key", "apikey", "secret", "signature", "token", "password",
 
 _component_levels: dict[str, int] = {}
 _default_level = 20
+_error_hooks: list[Callable[[str], None]] = []
+
+
+def add_error_hook(fn: Callable[[str], None]) -> None:
+    """`fn(event)` is called for every ERROR/CRITICAL log line (e.g. the rb_errors_total metric)."""
+    _error_hooks.append(fn)
+
+
+def remove_error_hook(fn: Callable[[str], None]) -> None:
+    if fn in _error_hooks:
+        _error_hooks.remove(fn)
+
+
+def _count_errors(_: Any, __: str, event_dict: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+    if event_dict.get("level") in ("error", "critical"):
+        for fn in list(_error_hooks):
+            fn(str(event_dict.get("event", "")))
+    return event_dict
 
 
 def _secret_values() -> list[str]:
@@ -64,6 +82,7 @@ def setup_logging(level: str = "INFO", component_levels: Mapping[str, str] | Non
         processors=[
             _level_filter,
             structlog.processors.add_log_level,
+            _count_errors,
             structlog.processors.TimeStamper(fmt="iso", utc=True),
             redact,
             structlog.processors.format_exc_info,

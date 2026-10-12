@@ -73,6 +73,8 @@ class Venue:
     last_reason: dict[str, str] = field(default_factory=dict)
     last_quote_ts: dict[str, int] = field(default_factory=dict)
     uptime: dict[str, list[int]] = field(default_factory=dict)
+    uptime_day: dict[str, list[int]] = field(default_factory=dict)  # today (UTC): [quoted_ms, total_ms]
+    uptime_date: str = ""
     fills: int = 0
     paused_until: int = 0  # e.g. waiting for reconciliation after a user-stream reconnect
     gates: list[Callable[[str, int], str | None]] = field(default_factory=list)  # -> reason to pull, or None
@@ -268,6 +270,10 @@ class Engine:
             m = self.market.get(ev.symbol)
             prev_mark = m.mark if m is not None else None
         new = self.md_handle(ev)
+        if self.metrics is not None and isinstance(ev, (BookTicker, AggTrade, MarkPrice, DepthDiff)) and ev.E > 0:
+            # local receive time on the exchange clock minus the exchange event time
+            lat = ev.recv_ts + getattr(self.clock, "offset_ms", 0) - ev.E
+            self.metrics.ws_latency.labels(type(ev).__name__).observe(max(lat, 0))
         if isinstance(ev, BookTicker):
             if new:
                 f = self.fv.get(ev.symbol)
@@ -326,6 +332,7 @@ class Engine:
                         if s not in v.positions.marks:
                             v.positions.set_mark(s, self.mark(s))
         interval = self.cfg.quoting.quote_interval_ms
+        date = dt.datetime.fromtimestamp(now / 1000, dt.UTC).strftime("%Y-%m-%d") if dt_ms > 0 else ""
         for v in self.venues.values():
             v.markouts.resolve(now, self.mid)
             if every_1s:
@@ -338,11 +345,16 @@ class Engine:
                         v.last_quote_ts[sym] = now
                         self._quote(v, sym, now)
             if dt_ms > 0:
+                if date != v.uptime_date:
+                    v.uptime_date, v.uptime_day = date, {}
                 for sym in v.symbols:
                     u = v.uptime.setdefault(sym, [0, 0])
+                    d = v.uptime_day.setdefault(sym, [0, 0])
                     u[1] += dt_ms
+                    d[1] += dt_ms
                     if v.orders.has_two_sided(sym):
                         u[0] += dt_ms
+                        d[0] += dt_ms
         for hook in self.timer_hooks:
             hook(now)
         if now - self._last_uptime_flush >= 60_000:
@@ -689,6 +701,13 @@ class Engine:
                 st = v.markouts.symbol_stats(sym, 60, last_n=200)
                 if st.n:
                     mt.realized_edge.labels(v.name, sym).set(st.mean)
+                for h in v.markouts.horizons:
+                    mo = v.markouts.symbol_stats(sym, h, last_n=200, edge=False)
+                    if mo.n:
+                        mt.markout.labels(v.name, sym, str(h)).set(mo.mean)
+            for sym, (q_ms, t_ms) in v.uptime_day.items():
+                if t_ms:
+                    mt.quote_uptime.labels(v.name, sym).set(q_ms / t_ms)
         for sym, m in self.market.symbols.items():
             mt.book_status.labels(sym).set(1 if m.status is BookStatus.OK else 0)
 

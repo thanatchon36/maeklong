@@ -105,6 +105,15 @@ session, so no signed call was made at all).
   rate limiter windows/headers/halt; user-stream payload parsing; trading-rules monitor.
 - Not run: signed calls against demo (no demo API keys in this session) — see pending table.
 
+## Dashboard metrics fix (2026-10-12)
+
+- Found while reading the Grafana dashboard against a running demo: five panels had no data because their
+  metrics were declared but never set: `rb_markout_bps`, `rb_quote_uptime_ratio`, `rb_rate_limit_usage_ratio`,
+  `rb_ws_latency_ms`, `rb_errors_total` (the "Ops" entry below overstated the dashboard). Now exported:
+  markout per horizon (last 200 fills), today's two-sided uptime (UTC day), limiter usage (timer hook in
+  `main.py`), WS latency = receive time on the exchange clock − event time `E`, and every ERROR/CRITICAL log
+  line counted by event name (`ops/logging.add_error_hook`). Tests: `tests/unit/test_metrics_export.py`.
+
 ## M5 — code done; live still blocked (OPEN_QUESTIONS B1)
 
 - Scope agreed with the operator (2026-10-12): write and unit-test M5–M7; never run live. Live remains refused by

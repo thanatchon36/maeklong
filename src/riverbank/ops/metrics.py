@@ -29,5 +29,13 @@ class Metrics:
                                       registry=r)
         self.errors = Counter("rb_errors_total", "Errors by kind", ["kind"], registry=r)
 
+    def set_rate_limits(self, usage: dict[str, float]) -> None:
+        for limit, ratio in usage.items():
+            self.rate_limit_usage.labels(limit).set(ratio)
+
+    def count_error(self, kind: str) -> None:
+        """Hooked into logging (ops/logging.add_error_hook): every ERROR/CRITICAL log line, by event name."""
+        self.errors.labels(kind).inc()
+
     def serve(self, port: int, addr: str = "0.0.0.0") -> None:
         start_http_server(port, addr=addr, registry=self.registry)
