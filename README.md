@@ -107,7 +107,8 @@ paper fill simulator · markout analytics · daily report · reconciler · excha
 | File | What it's for |
 |---|---|
 | `docs/PROGRESS.md` | what is built per milestone, test and smoke results, pending runs |
-| `docs/RUNBOOK.md` | operations manual in Thai: start/stop, kill switch, recovery, daily checks, live (§10) |
+| `docs/RUNBOOK.md` | operations manual in Thai (source of truth): start/stop, kill switch, recovery, daily checks, live (§10) |
+| `docs/RUNBOOK.en.md` | English translation of the runbook (same sections; the Thai file governs) |
 | `docs/ACCEPTANCE_PLAN.md` | how to run and judge the M1/M3/M4 acceptance runs |
 | `docs/OPEN_QUESTIONS.md` | every design decision taken where the spec was silent (most conservative option) |
 | `docs/DISCREPANCIES.md` | places where the spec differs from the current Binance docs (the docs win) |
