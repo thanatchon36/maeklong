@@ -1,0 +1,24 @@
+name: Feature / design change
+description: Propose a new capability or a change to a decision in docs/OPEN_QUESTIONS.md
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is missing or wrong today, with evidence (fills, markout, logs) if you have it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risk impact
+      description: Can this increase exposure, order count or loss? How is it bounded by the risk engine?
+    validations:
+      required: true
