@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: ruff
+        run: uv run ruff check .
+      - name: mypy (strict on core, risk, orders, hedge)
+        run: uv run mypy src/riverbank/core src/riverbank/risk src/riverbank/orders src/riverbank/hedge
+      - name: pytest
+        run: uv run pytest -q

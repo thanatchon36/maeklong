@@ -1,5 +1,13 @@
 # riverbank
 
+[![CI](https://github.com/thanatchon36/maeklong/actions/workflows/ci.yml/badge.svg)](https://github.com/thanatchon36/maeklong/actions/workflows/ci.yml)
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
+![mypy strict](https://img.shields.io/badge/mypy-strict%20on%20risk%20path-2a6db2)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+> The repo is named after the Mae Klong river; the bot that lives on it is `riverbank`.
+
 A multi-symbol market maker for Binance USDⓈ-M perpetual futures. It quotes both sides on a small,
 screened set of contracts. It also manages inventory, hedges the shared beta exposure, and pulls quotes
 when order flow turns toxic. It only scales a symbol after its realized edge per fill has been measured,
@@ -104,6 +112,11 @@ paper fill simulator · markout analytics · daily report · reconciler · excha
 | `docs/OPEN_QUESTIONS.md` | every design decision taken where the spec was silent (most conservative option) |
 | `docs/DISCREPANCIES.md` | places where the spec differs from the current Binance docs (the docs win) |
 
+## Roadmap
+
+Open work is tracked as [issues](https://github.com/thanatchon36/maeklong/issues): the M1/M3/M4 wall-clock
+acceptance runs, deploying the post-M4 fixes, the M5 sign-off and the live parts of M6/M7.
+
 ## Development
 
 ```bash
@@ -114,3 +127,9 @@ uv run mypy src/riverbank/core src/riverbank/risk src/riverbank/orders src/river
 
 Tests never sign requests for production hosts: a fixture enforces it. Each milestone is one commit
 (`M0:` … `M7:`).
+
+## Disclaimer
+
+This is a research project, not financial advice. Market making on leveraged perpetual futures can lose more
+than the margin you post. Live trading is disabled in code; if you enable it, you do so at your own risk.
+See [LICENSE](LICENSE) (MIT, no warranty) and [SECURITY.md](SECURITY.md).

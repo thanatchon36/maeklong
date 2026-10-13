@@ -2,6 +2,7 @@
 name = "riverbank"
 version = "0.1.0"
 description = "Multi-symbol quantitative market maker for Binance USD-M futures (see SPEC.md)"
+license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "aiohttp>=3.10",
