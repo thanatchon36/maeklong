@@ -3,7 +3,8 @@
 * `check(intent)` is called for every new order; strategy code cannot bypass it.
 * `evaluate(now)` runs every second on the venue's positions/equity:
     soft breach → REDUCE_ONLY (position, gross, net-beta, leverage, liquidation distance,
-                   daily loss ≥ 75 % of limit);  back to OK only below `resume_frac` of every limit
+                   daily loss ≥ 75 % of limit);  back to OK only below `resume_frac` of every limit.
+                   REDUCE_ONLY admits reducing orders and hedges that shrink |net beta|.
     hard breach → HALTED (daily loss limit, max drawdown); also `halt()` from the kill
                    switch, unhandled exceptions, 429/418, ...  HALTED is sticky (manual restart).
 Limits come only from config; nothing here ever raises a limit (SPEC §11.5).
@@ -124,7 +125,10 @@ class RiskEngine:
         reducing = intent.reduce_only and is_reducing(pos, intent.side, intent.qty, open_reducing)
         if self.state is RiskState.HALTED and not (reducing and intent.reason == "flatten"):
             return self._reject("halted")
-        if self.state is RiskState.REDUCE_ONLY and not reducing:
+        # A hedge that shrinks |net beta| may grow its own position in REDUCE_ONLY (limits below still apply):
+        # otherwise a net-beta breach above the resume bar can only clear when the quoted positions fill out.
+        hedge_down = intent.reason == "hedge" and not intent.reduce_only and self._reduces_net_beta(intent, mark)
+        if self.state is RiskState.REDUCE_ONLY and not (reducing or hedge_down):
             return self._reject("reduce_only_state")
         if len(orders) + 1 > self.cfg.max_open_orders:
             return self._reject("max_open_orders")

@@ -111,6 +111,21 @@ def test_reduce_only_state_allows_only_reducing_orders():
     assert r.check(intent(side=Side.SELL, qty="11", reduce_only=True), 1.0, T0).reason == "reduce_only_state"
 
 
+def test_reduce_only_state_allows_a_hedge_that_shrinks_net_beta():
+    # Shadow 2026-10-13: net beta at 0.93 of its limit (resume bar 0.9) kept the venue in REDUCE_ONLY for hours.
+    # The hedge that fixes it grows the hedge position, so it is not "reducing" and was refused: stuck, not quoting.
+    r, pb, _ = risk()
+    pb.apply_fill(fill(Side.BUY, "1", "40"))  # net beta +40
+    pb.set_mark("AAAUSDT", 1.0)
+    r.state = RiskState.REDUCE_ONLY
+    assert r.check(intent(side=Side.SELL, qty="20", sym="ETHUSDT", reason="hedge"), 1.0, T0).approved
+    assert r.check(intent(side=Side.BUY, qty="20", sym="ETHUSDT", reason="hedge"), 1.0, T0).reason \
+        == "reduce_only_state"  # grows net beta
+    assert r.check(intent(side=Side.SELL, qty="20", sym="ETHUSDT"), 1.0, T0).reason == "reduce_only_state"  # a quote
+    assert r.check(intent(side=Side.SELL, qty="60", sym="ETHUSDT", reason="hedge"), 1.0, T0).reason \
+        == "max_position"  # the hedge still obeys every limit
+
+
 def test_halted_rejects_everything_but_flatten():
     r, pb, ev = risk()
     pb.apply_fill(fill(Side.BUY, "1", "10"))

@@ -1,15 +1,16 @@
 """Hedger (SPEC §5.7, OPEN_QUESTIONS A2/B23).
 
-Every `hedge.eval_interval_s`, per venue whose risk state is OK (REDUCE_ONLY: unwind only, below):
+Every `hedge.eval_interval_s`, per venue whose risk state is OK or REDUCE_ONLY (below):
   exposure_H = Σ position_usdt_i × beta(i, H)   (hedge positions included, beta(H, H) = 1)
 If |exposure vs the first instrument| > `hedge_threshold_usdt`, hedge on the first instrument in
 `hedge.instruments` where qty = floor(|exposure_H| / mid_H, step) meets min qty / min notional
 (capped so the instrument's position stays within `risk.max_position_usdt`). The order is post-only
 (GTX) at our own side of the touch; taker (IOC market) only if `allow_taker` and the exposure exceeds
 `hedge_urgent_usdt`. qty is rounded down: we never over-hedge. If nothing fits, no hedge: the risk
-engine's `max_net_beta_exposure_usdt` does the work. REDUCE_ONLY → only orders that shrink an existing
-hedge position (never past flat); HALTED → hedges are pulled and flattening closes hedge positions with
-everything else.
+engine's `max_net_beta_exposure_usdt` does the work. REDUCE_ONLY → the same hedge, but a shrinking hedge
+position never goes past flat (reduceOnly) and a growing one stays within `resume_frac` of the position and
+gross limits, so it can clear the breach; HALTED → hedges are pulled and flattening closes hedge positions
+with everything else.
 """
 
 from __future__ import annotations
@@ -24,6 +25,10 @@ from riverbank.core.models import Order, OrderStatus, RiskState, Side
 from riverbank.ops.logging import get_logger
 
 log = get_logger("hedger")
+
+
+def _grows(pos: float, side: Side) -> bool:
+    return pos == 0 or (pos > 0) == (side is Side.BUY)
 
 
 class Hedger:
@@ -47,7 +52,8 @@ class Hedger:
         return sum(float(p.qty) * float(v.positions.mark(s)) * self.beta(s, ref)
                    for s, p in sorted(v.positions.positions.items()) if p.qty != 0)
 
-    def _target(self, v: Any, unwind_only: bool = False) -> tuple[str, Side, Decimal, Decimal] | None:
+    def _target(self, v: Any, reduce_only: bool = False) -> tuple[str, Side, Decimal, Decimal] | None:
+        room = self.cfg.risk.resume_frac if reduce_only else 1.0  # REDUCE_ONLY: never grow past the resume bar
         for inst in self.h.instruments:
             spec, f = self.engine.specs.get(inst), self.engine.fv.get(inst)
             mid = self.engine.mark(inst)
@@ -57,12 +63,10 @@ class Hedger:
             side = Side.SELL if e > 0 else Side.BUY
             notional = abs(e)
             pos = float(v.positions.qty(inst))
-            if (pos >= 0) == (side is Side.BUY) or pos == 0:  # the hedge grows this position and gross
-                if unwind_only:
-                    continue
-                notional = min(notional, self.cfg.risk.max_position_usdt - abs(pos) * mid,
-                               self.cfg.risk.max_gross_exposure_usdt - v.risk.gross_worst_case())
-            elif unwind_only:
+            if _grows(pos, side):  # the hedge grows this position and gross
+                notional = min(notional, room * self.cfg.risk.max_position_usdt - abs(pos) * mid,
+                               room * self.cfg.risk.max_gross_exposure_usdt - v.risk.gross_worst_case())
+            elif reduce_only:
                 notional = min(notional, abs(pos) * mid)  # close the leftover hedge leg, never flip it
             qty = floor_to_step(Decimal(repr(max(notional, 0.0) / mid)), spec.step)
             if qty >= spec.min_qty and float(qty) * mid >= float(spec.min_notional):
@@ -82,9 +86,9 @@ class Hedger:
             elif target is not None:
                 self._coarse.discard(v.name)
         elif v.risk.state is RiskState.REDUCE_ONLY and abs(e) > self.h.hedge_threshold_usdt:
-            # Nothing else trades a hedge instrument: without this a leftover hedge leg above the resume bar
-            # keeps the venue in REDUCE_ONLY forever, holding a naked position.
-            target = self._target(v, unwind_only=True)
+            # Nothing else trades a hedge instrument: without this a leftover hedge leg (demo twin 2026-10-12) or
+            # a net-beta breach (shadow 2026-10-13) above the resume bar keeps the venue in REDUCE_ONLY for hours.
+            target = self._target(v, reduce_only=True)
         keep: Order | None = None
         for o in live:
             if o.status is OrderStatus.PENDING_CANCEL:
@@ -101,7 +105,8 @@ class Hedger:
             return  # one hedge order at a time: wait for cancels to confirm before placing
         inst, side, price, qty = target
         mark = self.engine.mark(inst)
-        unwind = v.risk.state is RiskState.REDUCE_ONLY  # reduceOnly: the exchange also refuses a flip
+        # reduceOnly when shrinking a hedge leg: the exchange also refuses a flip
+        unwind = v.risk.state is RiskState.REDUCE_ONLY and not _grows(float(v.positions.qty(inst)), side)
         before = dict(v.risk.rejects)
         if self.h.allow_taker and abs(e) > self.h.hedge_urgent_usdt:
             order = v.orders.place(inst, side, Decimal(0), qty, reduce_only=unwind, tif="IOC", order_type="MARKET",

@@ -142,6 +142,13 @@ session, so no signed call was made at all).
   the vanished file would drop an hour from a day that is then cached for good, so the reader re-lists and
   reads again (`universe/history.py::_read`, test in `tests/unit/test_screener.py`). **Not deployed yet**:
   ships with the hedger fix above.
+- Net-beta deadlock (shadow, 2026-10-13 02:13 UTC): a gross soft breach put shadow in REDUCE_ONLY; afterwards
+  net beta stayed at about 70 of 75 USDT (APE/FARTCOIN/CHZ longs, 10 USDT ETH short), above the 90 % resume bar.
+  The hedge that fixes it grows the ETH short, which is not a reducing order, so the risk engine refused it and
+  the unwind-only hedger above never tried. Shadow quoted only reduce-side for hours. Now the risk engine admits a
+  hedge that shrinks |net beta| in REDUCE_ONLY (every limit still checked), and the hedger grows a hedge there
+  up to `resume_frac` of the position and gross limits. Tests in `tests/unit/test_hedger.py` and
+  `tests/unit/test_risk_positions_analytics.py`. **Not deployed yet**: ships with the hedger fix above.
 
 ## M5 — code done; live still blocked (OPEN_QUESTIONS B1)
 

@@ -97,12 +97,12 @@ def test_hedge_size_capped_by_max_position():
     assert float(o.qty) * 10.0 <= Config().risk.max_position_usdt  # risk checks notional at the mark
 
 
-def test_no_hedge_and_cancel_when_risk_not_ok():
+def test_no_hedge_and_cancel_when_halted():
     _eng, v, h = make()
     hold(v, "AAAUSDT", 40)
     h.evaluate(v, T0)
     [o] = hedges(v)
-    v.risk.state = RiskState.REDUCE_ONLY
+    v.risk.state = RiskState.HALTED
     h.evaluate(v, T0 + 5000)
     assert o.status is OrderStatus.PENDING_CANCEL
     assert all(x.status is OrderStatus.PENDING_CANCEL for x in hedges(v))
@@ -182,3 +182,15 @@ def test_reduce_only_unwind_never_flips_the_hedge():
     h.evaluate(v, T0 + 5000)
     [o] = hedges(v)
     assert (o.symbol, o.side, o.qty) == ("ETHUSDT", Side.BUY, Decimal("2.5"))
+
+
+def test_reduce_only_grows_the_hedge_up_to_the_resume_bar():
+    # Shadow 2026-10-13: REDUCE_ONLY on net beta (0.93 of the limit) with no hedge allowed to grow: stuck for hours.
+    # The hedge now grows in REDUCE_ONLY, capped at resume_frac (0.9) of max_position so it frees the venue
+    # instead of trading one breach for another.
+    _eng, v, h = make()
+    hold(v, "AAAUSDT", 48)  # 48 USDT to hedge; ETH may grow to 0.9 * 50 = 45 USDT
+    v.risk.state = RiskState.REDUCE_ONLY
+    h.evaluate(v, T0)
+    [o] = hedges(v)
+    assert (o.symbol, o.side, o.qty, o.reduce_only) == ("ETHUSDT", Side.SELL, Decimal("4.5"), False)
